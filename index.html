@@ -53,7 +53,43 @@
       SUPABASE_URL,
       SUPABASE_ANON_KEY
     );
+// =====================
+// Auth + DB fetch
+// =====================
+async function signIn(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
 
+async function getSession() {
+  const { data: { session }, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return session;
+}
+
+async function fetchAllFromDB() {
+  const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
+    supabase.from("vehicles").select("*"),
+    supabase.from("suppliers").select("*"),
+    supabase.from("accidents").select("*"),
+    supabase.from("maintenances").select("*"),
+    supabase.from("bills").select("*"),
+  ]);
+
+  for (const r of [vehicles, suppliers, accidents, maintenances, bills]) {
+    if (r.error) throw r.error;
+  }
+
+  return {
+    ...defaultData,
+    vehicles: vehicles.data || [],
+    suppliers: suppliers.data || [],
+    accidents: accidents.data || [],
+    maintenances: maintenances.data || [],
+    bills: bills.data || [],
+  };
+}
 
     // ---------- Utils ----------
     const uid = () => Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
