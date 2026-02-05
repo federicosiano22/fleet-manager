@@ -54,12 +54,117 @@
       SUPABASE_ANON_KEY
     );
     async function pushAllToDB(appData) {
-  await supabase.from("vehicles").upsert(appData.vehicles || []);
-  await supabase.from("suppliers").upsert(appData.suppliers || []);
-  await supabase.from("accidents").upsert(appData.accidents || []);
-  await supabase.from("maintenances").upsert(appData.maintenances || []);
-  await supabase.from("bills").upsert(appData.bills || []);
+  // 1) VEHICLES: mapping + upsert su plate
+  const vehiclesRows = (appData.vehicles || [])
+    .filter(v => (v?.plate || "").trim() !== "")
+    .map(v => ({
+      // NB: se hai id già nel backup ok, altrimenti lo ometti
+      id: v.id || undefined,
+      plate: String(v.plate).trim().toUpperCase(),
+      brand: v.brand || "",
+      model: v.model || "",
+      year: v.year || "",
+      category: v.category || "",
+      hub: v.hub || "",
+      group: v.group || "",
+      vin: v.vin || "",
+      km: v.km ?? null,
+      availability_start: v.availabilityStart || v.availability_start || null,
+      availability_end: v.availabilityEnd || v.availability_end || null,
+      periods: v.periods || [],
+      notes: v.notes || "",
+      updated_at: new Date().toISOString(),
+    }));
+
+  const r1 = await supabase
+    .from("vehicles")
+    .upsert(vehiclesRows, { onConflict: "plate" })
+    .select("plate");
+  if (r1.error) throw r1.error;
+
+  // 2) ALTRE TABELLE: upsert su id (serve id)
+  // Se qualche record non ha id, lo generiamo.
+  const ensureId = (x) => ({ ...x, id: x.id || crypto.randomUUID() });
+
+  const suppliersRows = (appData.suppliers || []).map(ensureId).map(s => ({
+    id: s.id,
+    name: s.name || "",
+    type: s.type || "",
+    phone: s.phone || "",
+    email: s.email || "",
+    notes: s.notes || "",
+    updated_at: new Date().toISOString(),
+  }));
+
+  const accidentsRows = (appData.accidents || []).map(ensureId).map(a => ({
+    id: a.id,
+    plate: (a.plate || "").trim().toUpperCase(),
+    date: a.date || null,
+    start_date: a.startDate || a.start_date || null,
+    end_date: a.endDate || a.end_date || null,
+    status: a.status || "",
+    description: a.description || "",
+    location: a.location || "",
+    cost: a.cost ?? null,
+    insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
+    notes: a.notes || "",
+    supplier_id: a.supplierId || a.supplier_id || null,
+    attachment_name: a.attachmentName || a.attachment_name || null,
+    attachment_data: a.attachmentData || a.attachment_data || null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const maintRows = (appData.maintenances || []).map(ensureId).map(m => ({
+    id: m.id,
+    plate: (m.plate || "").trim().toUpperCase(),
+    date: m.date || null,
+    start_date: m.startDate || m.start_date || null,
+    end_date: m.endDate || m.end_date || null,
+    status: m.status || "",
+    type: m.type || "",
+    km: m.km ?? null,
+    cost: m.cost ?? null,
+    insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
+    notes: m.notes || "",
+    supplier_id: m.supplierId || m.supplier_id || null,
+    attachment_name: m.attachmentName || m.attachment_name || null,
+    attachment_data: m.attachmentData || m.attachment_data || null,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const billsRows = (appData.bills || []).map(ensureId).map(b => ({
+    id: b.id,
+    plate: (b.plate || "").trim().toUpperCase(),
+    type: b.type || "",
+    due_date: b.dueDate || b.due_date || null,
+    amount: b.amount ?? null,
+    paid: !!b.paid,
+    supplier_id: b.supplierId || b.supplier_id || null,
+    notes: b.notes || "",
+    updated_at: new Date().toISOString(),
+  }));
+
+  const r2 = await supabase.from("suppliers").upsert(suppliersRows, { onConflict: "id" }).select("id");
+  if (r2.error) throw r2.error;
+
+  const r3 = await supabase.from("accidents").upsert(accidentsRows, { onConflict: "id" }).select("id");
+  if (r3.error) throw r3.error;
+
+  const r4 = await supabase.from("maintenances").upsert(maintRows, { onConflict: "id" }).select("id");
+  if (r4.error) throw r4.error;
+
+  const r5 = await supabase.from("bills").upsert(billsRows, { onConflict: "id" }).select("id");
+  if (r5.error) throw r5.error;
+
+  return {
+    vehicles: r1.data?.length || 0,
+    suppliers: r2.data?.length || 0,
+    accidents: r3.data?.length || 0,
+    maintenances: r4.data?.length || 0,
+    bills: r5.data?.length || 0,
+  };
 }
+
 
 // =====================
 // Auth + DB fetch
@@ -2560,13 +2665,20 @@ useEffect(() => {
                   <button
   className="px-3 py-2 rounded-xl bg-emerald-500/70 hover:bg-emerald-500/90 border border-emerald-300/30 text-sm"
   onClick={async () => {
-    try {
-      await pushAllToDB(data);
-      alert("Database sincronizzato ✅");
-    } catch (e) {
-      alert("Errore sync DB: " + (e?.message || e));
-    }
-  }}
+  try {
+    const res = await pushAllToDB(data);
+    alert(`DB sincronizzato ✅
+vehicles: ${res.vehicles}
+suppliers: ${res.suppliers}
+accidents: ${res.accidents}
+maintenances: ${res.maintenances}
+bills: ${res.bills}`);
+  } catch (e) {
+    alert("Errore sync DB: " + (e?.message || e));
+    console.error(e);
+  }
+}}
+
 >
   Sync DB
 </button>
