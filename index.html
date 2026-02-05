@@ -2557,6 +2557,20 @@ useEffect(() => {
                     </select>
                   </div>
                   <div className="hidden lg:block text-sm text-white/60">Selezione rapida veicolo:</div>
+                  <button
+  className="px-3 py-2 rounded-xl bg-emerald-500/70 hover:bg-emerald-500/90 border border-emerald-300/30 text-sm"
+  onClick={async () => {
+    try {
+      await pushAllToDB(data);
+      alert("Database sincronizzato ✅");
+    } catch (e) {
+      alert("Errore sync DB: " + (e?.message || e));
+    }
+  }}
+>
+  Sync DB
+</button>
+
                 </div>
 
                 <VehicleQuickPicker
