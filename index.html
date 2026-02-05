@@ -43,6 +43,17 @@
 
   <script type="text/babel">
     const { useEffect, useMemo, useRef, useState } = React;
+    // =====================
+    // Supabase init
+    // =====================
+    const SUPABASE_URL = "INCOLLA_QUI_PROJECT_URL";
+    const SUPABASE_ANON_KEY = "INCOLLA_QUI_ANON_KEY";
+    
+    const supabase = window.supabase.createClient(
+      SUPABASE_URL,
+      SUPABASE_ANON_KEY
+    );
+
 
     // ---------- Utils ----------
     const uid = () => Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
