@@ -164,7 +164,11 @@
     bills: r5.data?.length || 0,
   };
 }
-
+async function upsertTable(table, rows) {
+  if (!rows || !rows.length) return;
+  const { error } = await supabase.from(table).upsert(rows);
+  if (error) throw error;
+}
 
 // =====================
 // Auth + DB fetch
@@ -2448,11 +2452,7 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
     </div>
   );
 };
-async function upsertTable(table, rows) {
-  if (!rows || !rows.length) return;
-  const { error } = await supabase.from(table).upsert(rows);
-  if (error) throw error;
-}
+
 
     // ---------- App ----------
     const FleetManagerApp = () => {
