@@ -2475,6 +2475,20 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
       const [selectedPlate, setSelectedPlate] = useState("");
       const [summaryPlate, setSummaryPlate] = useState("");
+
+
+      const applyingRemoteRef = useRef(false);
+
+      const safeFetchAll = async () => {
+        applyingRemoteRef.current = true;
+        try {
+          const dbData = await fetchAllFromDB();
+          setData(dbData);
+        } finally {
+          // Sblocca dopo aver applicato lo state (evita loop realtime -> setData -> autosync)
+          setTimeout(() => { applyingRemoteRef.current = false; }, 0);
+        }
+      };
 useEffect(() => {
   if (!session) return;
 
@@ -2484,8 +2498,8 @@ useEffect(() => {
       "postgres_changes",
       { event: "*", schema: "public", table: "*" },
       async () => {
-        const dbData = await fetchAllFromDB();
-        setData(dbData);
+        if (applyingRemoteRef.current) return;
+        await safeFetchAll();
       }
     )
     .subscribe();
@@ -2517,8 +2531,7 @@ useEffect(() => {
   (async () => {
     try {
       setLoading(true);
-      const dbData = await fetchAllFromDB();
-      setData(dbData);
+      await safeFetchAll();
     } catch (e) {
       alert("Errore caricamento dati: " + (e?.message || e));
     } finally {
@@ -2540,6 +2553,7 @@ const handleLogin = async (email, password) => {
 };
 useEffect(() => {
   if (!session) return;
+  if (applyingRemoteRef.current) return;
 
   const timeout = setTimeout(async () => {
     try {
@@ -2553,7 +2567,7 @@ useEffect(() => {
     } catch (e) {
       console.error("Errore sync DB", e);
     }
-  }, 500); // debounce
+  }, 800); // debounce
 
   return () => clearTimeout(timeout);
 }, [data, session]);
