@@ -53,6 +53,14 @@
       SUPABASE_URL,
       SUPABASE_ANON_KEY
     );
+    async function pushAllToDB(appData) {
+  await supabase.from("vehicles").upsert(appData.vehicles || []);
+  await supabase.from("suppliers").upsert(appData.suppliers || []);
+  await supabase.from("accidents").upsert(appData.accidents || []);
+  await supabase.from("maintenances").upsert(appData.maintenances || []);
+  await supabase.from("bills").upsert(appData.bills || []);
+}
+
 // =====================
 // Auth + DB fetch
 // =====================
