@@ -1,0 +1,2397 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fleet Manager Pro</title>
+
+  <!-- React -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+
+  <!-- SheetJS (Import/Export Excel) -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body { background: radial-gradient(1200px 800px at 10% 10%, rgba(168,85,247,0.18), transparent 60%),
+                      radial-gradient(1200px 800px at 90% 20%, rgba(59,130,246,0.16), transparent 55%),
+                      radial-gradient(1200px 800px at 50% 90%, rgba(16,185,129,0.12), transparent 55%),
+                      #0b1220; }
+    .glass { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); backdrop-filter: blur(12px); }
+    .chip { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.10); }
+    .btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); }
+    .btn:hover { background: rgba(255,255,255,0.12); }
+    input, select, textarea { background: rgba(255,255,255,0.07) !important; border: 1px solid rgba(255,255,255,0.12) !important; color: white !important; }
+    input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.55); }
+    select option { background: #1a2332 !important; color: white !important; }
+    select:focus option { background: #1a2332 !important; }
+    table { border-collapse: separate; border-spacing: 0; }
+    th { position: sticky; top: 0; background: rgba(10, 18, 32, 0.85); backdrop-filter: blur(8px); }
+  </style>
+</head>
+
+<body class="text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    // ---------- Utils ----------
+    const uid = () => Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+    const todayISO = () => new Date().toISOString().slice(0,10);
+
+    const parseNum = (v) => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = Number(String(v).replace(",", "."));
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const normalizePlate = (p) => String(p || "").trim().toUpperCase();
+
+// --- FIX v3.2: gestione corretta date da Excel (seriali tipo 45845)
+const excelSerialToISO = (v) => {
+  if (v === null || v === undefined || v === "") return "";
+  // Excel serial date (es. 45845)
+  if (typeof v === "number" && v > 10000 && v < 100000) {
+    const d = new Date((v - 25569) * 86400 * 1000);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  // stringhe tipo 01/07/2025
+  if (typeof v === "string") {
+    const s = v.trim();
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      const dd = String(m[1]).padStart(2, "0");
+      const mm = String(m[2]).padStart(2, "0");
+      let yy = m[3];
+      if (yy.length === 2) yy = "20" + yy;
+      return `${yy}-${mm}-${dd}`;
+    }
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return s.slice(0, 10);
+  }
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+};
+
+
+    const withinRange = (d, start, end) => {
+      if (!d) return false;
+      const x = new Date(d).getTime();
+      if (start) {
+        const s = new Date(start).getTime();
+        if (x < s) return false;
+      }
+      if (end) {
+        const e = new Date(end).getTime();
+        if (x > e) return false;
+      }
+      return true;
+    };
+
+    const isVehicleAvailableOn = (vehicle, isoDate) => {
+      const d = isoDate || todayISO();
+      const start = vehicle?.availabilityStart || null;
+      const end   = vehicle?.availabilityEnd   || null;
+      // If both empty => available (legacy)
+      if (!start && !end) return true;
+      return withinRange(d, start, end);
+    };
+
+    // Optional timeline periods (noleggiato / manutenzione / fuori flotta / bloccato)
+    const periodStatusOrder = {
+      "Fuori flotta": 4,
+      "Manutenzione": 3,
+      "Noleggiato": 2,
+      "Bloccato": 1,
+    };
+
+    const normalizePeriods = (periods) => {
+      if (!Array.isArray(periods)) return [];
+      return periods
+        .map(p => ({
+          id: p?.id || uid(),
+          status: String(p?.status || "").trim() || "Bloccato",
+          start: (p?.start || p?.from || "")?.toString?.() || "",
+          end: (p?.end || p?.to || "")?.toString?.() || "",
+          notes: String(p?.notes || "").trim(),
+        }))
+        .filter(p => p.start || p.end);
+    };
+
+    const statusBadge = (label) => {
+      const tone = {
+        "Disponibile": "good",
+        "Non disponibile": "bad",
+        "Noleggiato": "info",
+        "Manutenzione": "warn",
+        "Fuori flotta": "bad",
+        "Bloccato": "warn",
+      }[label] || "neutral";
+      return <Badge tone={tone}>{label}</Badge>;
+    };
+
+    const computeVehicleStatusOn = (vehicle, isoDate) => {
+      const d = isoDate || todayISO();
+      const periods = normalizePeriods(vehicle?.periods);
+      // If date is outside availability window => Non disponibile
+      if (!isVehicleAvailableOn(vehicle, d)) return "Non disponibile";
+
+      // If inside availability, check overriding timeline periods
+      const matching = periods.filter(p => withinRange(d, p.start || null, p.end || null));
+      if (!matching.length) return "Disponibile";
+      matching.sort((a,b) => (periodStatusOrder[b.status]||0) - (periodStatusOrder[a.status]||0));
+      return matching[0].status || "Bloccato";
+    };
+
+    const fmtEUR = (n) => {
+      if (n === null || n === undefined || n === "") return "-";
+      const x = Number(n);
+      if (!Number.isFinite(x)) return "-";
+      return x.toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+    };
+
+    const daysUntil = (iso) => {
+      if (!iso) return null;
+      const ms = new Date(iso).setHours(0,0,0,0) - new Date(todayISO()).setHours(0,0,0,0);
+      return Math.round(ms / (1000*60*60*24));
+    };
+
+    const downloadBlob = (blob, filename) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    };
+
+    const readFileAsArrayBuffer = (file) =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsArrayBuffer(file);
+      });
+
+    const readFileAsDataURL = (file) =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+
+    // ---------- Storage ----------
+    const STORAGE_KEY = "fleet_manager_pro_v2";
+    const BACKUP_TIME_KEY = "fleet_backup_last_time";
+    
+    const loadStore = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    };
+    
+    const saveStore = (data) => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      // Dopo ogni salvataggio, verifica se è ora di fare il backup
+      checkAndTriggerDailyBackup(data);
+    };
+
+    // Funzione per generare Excel di backup
+    const generateBackupExcel = (data) => {
+      const wb = XLSX.utils.book_new();
+      
+      // Sheet Veicoli
+      const vehiclesData = data.vehicles.map(v => ({
+        Targa: v.plate,
+        Brand: v.brand,
+        Modello: v.model,
+        Anno: v.year,
+        Categoria: v.category,
+        Hub: v.hub,
+        Gruppo: v.group,
+        VIN: v.vin,
+        KM: v.km,
+        'Disponibilità Inizio': v.availabilityStart,
+        'Disponibilità Fine': v.availabilityEnd,
+        Note: v.notes
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vehiclesData), "Veicoli");
+      
+      // Sheet Sinistri
+      const accidentsData = data.accidents.map(a => ({
+        Targa: a.plate,
+        Data: a.date,
+        'Data Inizio': a.startDate,
+        'Data Fine': a.endDate,
+        Descrizione: a.description,
+        Costo: a.cost,
+        'Rimborso Assicurazione': a.insuranceReimbursement,
+        Stato: a.status,
+        Note: a.notes,
+        'N. Allegati': (a.attachments || []).length
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(accidentsData), "Sinistri");
+      
+      // Sheet Manutenzioni
+      const maintenancesData = data.maintenances.map(m => ({
+        Targa: m.plate,
+        Data: m.date,
+        'Data Inizio': m.startDate,
+        'Data Fine': m.endDate,
+        Tipo: m.type,
+        KM: m.km,
+        Costo: m.cost,
+        'Rimborso Assicurazione': m.insuranceReimbursement,
+        Stato: m.status,
+        Note: m.notes,
+        'N. Allegati': (m.attachments || []).length
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(maintenancesData), "Manutenzioni");
+      
+      // Sheet Bolli/Scadenze
+      const billsData = data.bills.map(b => ({
+        Targa: b.plate,
+        Tipo: b.type,
+        Scadenza: b.dueDate,
+        Importo: b.amount,
+        Pagato: b.paid ? 'Sì' : 'No'
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(billsData), "Bolli e Scadenze");
+      
+      // Sheet Fornitori
+      const suppliersData = data.suppliers.map(s => ({
+        Nome: s.name,
+        Tipo: s.type,
+        Telefono: s.phone,
+        Email: s.email,
+        Note: s.notes
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(suppliersData), "Fornitori");
+      
+      return wb;
+    };
+
+    // Funzione per scaricare il backup
+    const downloadBackupExcel = (data) => {
+      const wb = generateBackupExcel(data);
+      const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const filename = `FleetManager_Backup_${timestamp}.xlsx`;
+      XLSX.writeFile(wb, filename);
+      console.log(`Backup automatico scaricato: ${filename}`);
+    };
+
+    // Controlla se è necessario fare il backup giornaliero
+    const checkAndTriggerDailyBackup = (data) => {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentDate = now.toISOString().slice(0, 10);
+      
+      // Recupera l'ultima volta che è stato fatto il backup
+      const lastBackupTime = localStorage.getItem(BACKUP_TIME_KEY);
+      const lastBackupDate = lastBackupTime ? lastBackupTime.slice(0, 10) : null;
+      
+      // Se sono le 18:00 o dopo, e non abbiamo ancora fatto il backup oggi
+      if (currentHour >= 18 && lastBackupDate !== currentDate) {
+        downloadBackupExcel(data);
+        localStorage.setItem(BACKUP_TIME_KEY, now.toISOString());
+      }
+    };
+
+    // Timer per controllare ogni minuto se è ora del backup
+    const startBackupTimer = (data) => {
+      setInterval(() => {
+        checkAndTriggerDailyBackup(data);
+      }, 60000); // Controlla ogni minuto
+    };
+
+    const defaultData = {
+      vehicles: [],
+      accidents: [],
+      maintenances: [],
+      bills: [],
+      suppliers: [],
+      ui: { lastView: "dashboard" }
+    };
+
+    // Struttura completa per maintenance/accident
+    const defaultMaintenance = () => ({
+      id: uid(),
+      plate: "",
+      date: todayISO(),
+      startDate: "",
+      endDate: "",
+      type: "",
+      description: "",
+      cost: null,
+      supplier: "",
+      notes: "",
+      status: "aperto",
+      insuranceReimbursement: null,
+      attachments: []
+    });
+
+    const defaultAccident = () => ({
+      id: uid(),
+      plate: "",
+      date: todayISO(),
+      startDate: "",
+      endDate: "",
+      location: "",
+      description: "",
+      cost: null,
+      notes: "",
+      status: "aperto",
+      insuranceReimbursement: null,
+      attachments: []
+    });
+
+    // ---------- Components ----------
+    const Badge = ({ children, tone="neutral" }) => {
+      const cls = {
+        neutral: "chip text-white/80",
+        good: "bg-emerald-500/20 border border-emerald-400/30 text-emerald-100",
+        warn: "bg-amber-500/20 border border-amber-400/30 text-amber-100",
+        bad: "bg-rose-500/20 border border-rose-400/30 text-rose-100",
+        info: "bg-sky-500/20 border border-sky-400/30 text-sky-100",
+      }[tone] || "chip";
+      return <span className={"px-2 py-1 rounded-full text-xs " + cls}>{children}</span>;
+    };
+
+    const Modal = ({ open, title, onClose, children, wide=false }) => {
+      const contentRef = useRef(null);
+      
+      useEffect(() => {
+        if (open && contentRef.current) {
+          contentRef.current.scrollTop = 0;
+        }
+      }, [open]);
+
+      if (!open) return null;
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+          <div className={"relative bg-slate-950/95 rounded-2xl shadow-2xl w-full ring-1 ring-white/10 flex flex-col border border-white/20 " + (wide ? "max-w-7xl max-h-[90vh]" : "max-w-4xl max-h-[90vh]")}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
+              <div className="font-semibold">{title}</div>
+              <button className="btn rounded-xl px-3 py-2" onClick={onClose}>
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <div ref={contentRef} className="p-6 overflow-y-auto flex-1">{children}</div>
+          </div>
+        </div>
+      );
+    };
+
+    const Field = ({ label, children, hint }) => (
+      <div className="space-y-1">
+        <div className="text-xs text-white/70">{label}</div>
+        {children}
+        {hint ? <div className="text-[11px] text-white/45">{hint}</div> : null}
+      </div>
+    );
+
+    const SearchableSelect = ({ vehicles, value, onChange, placeholder = "— Seleziona —" }) => {
+      const [isOpen, setIsOpen] = useState(false);
+      const [search, setSearch] = useState("");
+      const dropdownRef = useRef(null);
+
+      const filtered = useMemo(() => {
+        if (!search.trim()) return vehicles;
+        const q = search.toLowerCase();
+        return vehicles.filter(v => 
+          (v.plate || "").toLowerCase().includes(q) ||
+          (v.brand || "").toLowerCase().includes(q) ||
+          (v.model || "").toLowerCase().includes(q)
+        );
+      }, [vehicles, search]);
+
+      const selected = vehicles.find(v => v.plate === value);
+
+      useEffect(() => {
+        const handleClick = (e) => {
+          if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+            setIsOpen(false);
+          }
+        };
+        document.addEventListener("mousedown", handleClick);
+        return () => document.removeEventListener("mousedown", handleClick);
+      }, []);
+
+      return (
+        <div className="relative" ref={dropdownRef}>
+          <div 
+            className="w-full px-3 py-2 rounded-xl cursor-pointer flex items-center justify-between"
+            style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", color: "white" }}
+            onClick={() => setIsOpen(!isOpen)}
+          >
+            <span>{selected ? `${selected.plate} — ${selected.brand} ${selected.model}` : placeholder}</span>
+            <i className={`fa-solid fa-chevron-${isOpen ? 'up' : 'down'} text-xs`}></i>
+          </div>
+
+          {isOpen && (
+            <div className="absolute z-50 w-full mt-1 rounded-xl overflow-hidden shadow-xl border border-white/20" style={{ background: "#1a2332" }}>
+              <div className="p-2 border-b border-white/10">
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 rounded-lg text-sm"
+                  placeholder="Cerca targa, brand, modello..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                  autoFocus
+                />
+              </div>
+              <div className="max-h-[200px] overflow-y-auto">
+                <div 
+                  className="px-3 py-2 cursor-pointer hover:bg-white/10 text-white/60"
+                  onClick={() => { onChange(""); setIsOpen(false); setSearch(""); }}
+                >
+                  {placeholder}
+                </div>
+                {filtered.map(v => (
+                  <div
+                    key={v.id}
+                    className="px-3 py-2 cursor-pointer hover:bg-white/10 text-white"
+                    onClick={() => { onChange(v.plate); setIsOpen(false); setSearch(""); }}
+                  >
+                    {v.plate} — {v.brand} {v.model}
+                  </div>
+                ))}
+                {filtered.length === 0 && (
+                  <div className="px-3 py-4 text-center text-white/50 text-sm">Nessun veicolo trovato</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const Divider = () => <div className="h-px bg-white/10 my-4" />;
+
+    // Global vehicle picker + quick open summary
+    const VehicleQuickPicker = ({ vehicles, selectedPlate, setSelectedPlate, onOpenSummary }) => {
+      const plates = useMemo(() => vehicles.map(v => v.plate).sort(), [vehicles]);
+      return (
+        <div className="flex items-center gap-3">
+          <div className="hidden md:block text-xs text-white/60">Targa</div>
+          <select
+            className="px-3 py-2 rounded-xl text-sm min-w-[220px]"
+            value={selectedPlate || ""}
+            onChange={(e) => setSelectedPlate(e.target.value || null)}
+          >
+            <option value="">— Seleziona —</option>
+            {plates.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button
+            className={"btn rounded-xl px-3 py-2 text-sm " + (!selectedPlate ? "opacity-50 cursor-not-allowed" : "")}
+            onClick={() => selectedPlate && onOpenSummary(selectedPlate)}
+            disabled={!selectedPlate}
+            title="Apri riepilogo veicolo"
+          >
+            <i className="fa-solid fa-chart-pie mr-2"></i>Riepilogo
+          </button>
+        </div>
+      );
+    };
+
+    const DataBar = ({ children }) => (
+      <div className="rounded-2xl p-4 flex flex-col md:flex-row md:items-center gap-3 md:justify-between bg-white/5 border border-white/10">
+        {children}
+      </div>
+    );
+
+    const Table = ({ columns, rows, rowKey, emptyText="Nessun dato" }) => (
+      <div className="rounded-2xl overflow-hidden">
+        <div className="overflow-auto max-h-[65vh]">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr>
+                {columns.map(c => (
+                  <th key={c.key} className="text-left px-4 py-3 text-xs font-semibold text-white/70 border-b border-white/10">
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td className="px-4 py-6 text-white/60" colSpan={columns.length}>{emptyText}</td></tr>
+              ) : rows.map(r => (
+                <tr key={rowKey(r)} className="border-b border-white/5 hover:bg-white/5">
+                  {columns.map(c => (
+                    <td key={c.key} className="px-4 py-3 align-top">
+                      {c.render ? c.render(r) : (r[c.key] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+
+    // ---------- Forms ----------
+    const VehicleForm = ({ initial, onSave, onCancel }) => {
+      const [v, setV] = useState(() => initial || ({
+        id: uid(),
+        plate: "",
+        brand: "",
+        model: "",
+        year: "",
+        category: "",
+        hub: "",
+        group: "",
+        vin: "",
+        km: "",
+        availabilityStart: "",
+        availabilityEnd: "",
+        periods: [],
+        notes: ""
+      }));
+
+      const set = (k, val) => setV(prev => ({ ...prev, [k]: val }));
+
+      const validate = () => {
+        const plate = normalizePlate(v.plate);
+        if (!plate) return "Inserisci la targa.";
+        if (v.availabilityStart && v.availabilityEnd && new Date(v.availabilityStart) > new Date(v.availabilityEnd)) {
+          return "Le date disponibilità non sono coerenti (inizio > fine).";
+        }
+        return null;
+      };
+
+      const err = validate();
+
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Targa *">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.plate} onChange={e => set("plate", e.target.value)} />
+            </Field>
+            <Field label="Brand">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.brand} onChange={e => set("brand", e.target.value)} />
+            </Field>
+            <Field label="Modello">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.model} onChange={e => set("model", e.target.value)} />
+            </Field>
+
+            <Field label="Anno">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.year} onChange={e => set("year", e.target.value)} />
+            </Field>
+            <Field label="Categoria">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.category} onChange={e => set("category", e.target.value)} />
+            </Field>
+            <Field label="Hub / Sede">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.hub} onChange={e => set("hub", e.target.value)} />
+            </Field>
+
+            <Field label="Gruppo (es. Primerent / Driverso)">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.group} onChange={e => set("group", e.target.value)} />
+            </Field>
+            <Field label="VIN / Telaio">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.vin} onChange={e => set("vin", e.target.value)} />
+            </Field>
+            <Field label="KM (odometro)">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.km} onChange={e => set("km", e.target.value)} placeholder="es. 24500" />
+            </Field>
+
+            <Field label="Disponibilità - Inizio" hint="Se vuoto, considerata disponibile (legacy).">
+              <input type="date" className="w-full px-3 py-2 rounded-xl" value={v.availabilityStart} onChange={e => set("availabilityStart", e.target.value)} />
+            </Field>
+            <Field label="Disponibilità - Fine" hint="Inclusiva. Se vuoto, senza fine.">
+              <input type="date" className="w-full px-3 py-2 rounded-xl" value={v.availabilityEnd} onChange={e => set("availabilityEnd", e.target.value)} />
+            </Field>
+            <Field label="Stato (oggi)">
+              <div className="pt-2">
+                {statusBadge(computeVehicleStatusOn(v, todayISO()))}
+              </div>
+            </Field>
+          </div>
+
+          <div className="glass rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold">Stati & Timeline (opzionale)</div>
+                <div className="text-xs text-white/55">Puoi definire periodi in cui il veicolo è Noleggiato, in Manutenzione, Fuori flotta o Bloccato. Lo stato sovrascrive “Disponibile” dentro la finestra di disponibilità.</div>
+              </div>
+              <button
+                className="btn rounded-xl px-3 py-2 text-sm"
+                onClick={() => set("periods", [...normalizePeriods(v.periods), { id: uid(), status: "Noleggiato", start: todayISO(), end: "", notes: "" }])}
+              >
+                <i className="fa-solid fa-plus mr-2"></i>Aggiungi periodo
+              </button>
+            </div>
+
+            {normalizePeriods(v.periods).length ? (
+              <div className="space-y-2">
+                {normalizePeriods(v.periods).map((p) => (
+                  <div key={p.id} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                    <div className="md:col-span-3">
+                      <div className="text-xs text-white/70">Stato</div>
+                      <select className="w-full px-3 py-2 rounded-xl" value={p.status} onChange={(e)=>{
+                        const next = normalizePeriods(v.periods).map(x => x.id===p.id ? { ...x, status: e.target.value } : x);
+                        set("periods", next);
+                      }}>
+                        <option>Noleggiato</option>
+                        <option>Manutenzione</option>
+                        <option>Fuori flotta</option>
+                        <option>Bloccato</option>
+                      </select>
+                    </div>
+                    <div className="md:col-span-3">
+                      <div className="text-xs text-white/70">Dal</div>
+                      <input type="date" className="w-full px-3 py-2 rounded-xl" value={p.start} onChange={(e)=>{
+                        const next = normalizePeriods(v.periods).map(x => x.id===p.id ? { ...x, start: e.target.value } : x);
+                        set("periods", next);
+                      }} />
+                    </div>
+                    <div className="md:col-span-3">
+                      <div className="text-xs text-white/70">Al (inclusivo)</div>
+                      <input type="date" className="w-full px-3 py-2 rounded-xl" value={p.end} onChange={(e)=>{
+                        const next = normalizePeriods(v.periods).map(x => x.id===p.id ? { ...x, end: e.target.value } : x);
+                        set("periods", next);
+                      }} />
+                    </div>
+                    <div className="md:col-span-2">
+                      <div className="text-xs text-white/70">Note</div>
+                      <input className="w-full px-3 py-2 rounded-xl" value={p.notes} onChange={(e)=>{
+                        const next = normalizePeriods(v.periods).map(x => x.id===p.id ? { ...x, notes: e.target.value } : x);
+                        set("periods", next);
+                      }} />
+                    </div>
+                    <div className="md:col-span-1 flex md:justify-end">
+                      <button className="btn rounded-xl px-3 py-2" onClick={()=>{
+                        const next = normalizePeriods(v.periods).filter(x => x.id !== p.id);
+                        set("periods", next);
+                      }} title="Rimuovi">
+                        <i className="fa-solid fa-trash"></i>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-white/60">Nessun periodo configurato.</div>
+            )}
+          </div>
+
+          <Field label="Note">
+            <textarea className="w-full px-3 py-2 rounded-xl min-h-[90px]" value={v.notes} onChange={e => set("notes", e.target.value)} />
+          </Field>
+
+          {err ? <div className="text-rose-200 text-sm">{err}</div> : null}
+
+          <div className="flex justify-end gap-2">
+            <button className="btn rounded-xl px-4 py-2" onClick={onCancel}>Annulla</button>
+            <button
+              className={"rounded-xl px-4 py-2 bg-purple-500/70 hover:bg-purple-500/90 border border-purple-300/30 " + (err ? "opacity-50 cursor-not-allowed" : "")}
+              onClick={() => {
+                if (err) return;
+                const payload = {
+                  ...v,
+                  plate: normalizePlate(v.plate),
+                  km: parseNum(v.km),
+                  periods: normalizePeriods(v.periods)
+                };
+                onSave(payload);
+              }}
+              disabled={!!err}
+            >
+              Salva
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    const SupplierForm = ({ initial, onSave, onCancel }) => {
+      const [s, setS] = useState(() => initial || ({ id: uid(), name:"", type:"", phone:"", email:"", notes:"" }));
+      const set = (k,v) => setS(prev => ({...prev,[k]:v}));
+      const err = !String(s.name||"").trim() ? "Inserisci il nome fornitore." : null;
+
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Nome *">
+              <input className="w-full px-3 py-2 rounded-xl" value={s.name} onChange={e=>set("name", e.target.value)} />
+            </Field>
+            <Field label="Tipo (es. Officina, Carrozzeria, Assicurazione)">
+              <input className="w-full px-3 py-2 rounded-xl" value={s.type} onChange={e=>set("type", e.target.value)} />
+            </Field>
+            <Field label="Telefono">
+              <input className="w-full px-3 py-2 rounded-xl" value={s.phone} onChange={e=>set("phone", e.target.value)} />
+            </Field>
+            <Field label="Email">
+              <input className="w-full px-3 py-2 rounded-xl" value={s.email} onChange={e=>set("email", e.target.value)} />
+            </Field>
+          </div>
+          <Field label="Note">
+            <textarea className="w-full px-3 py-2 rounded-xl min-h-[90px]" value={s.notes} onChange={e=>set("notes", e.target.value)} />
+          </Field>
+          {err ? <div className="text-rose-200 text-sm">{err}</div> : null}
+          <div className="flex justify-end gap-2">
+            <button className="btn rounded-xl px-4 py-2" onClick={onCancel}>Annulla</button>
+            <button
+              className={"rounded-xl px-4 py-2 bg-emerald-500/70 hover:bg-emerald-500/90 border border-emerald-300/30 " + (err ? "opacity-50 cursor-not-allowed" : "")}
+              onClick={() => !err && onSave({ ...s, name: String(s.name).trim() })}
+              disabled={!!err}
+            >
+              Salva
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    const AttachmentField = ({ label="Allegato", valueName, onPick }) => {
+      const fileRef = useRef(null);
+      return (
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-white/70 w-28">{label}</div>
+          <button className="btn rounded-xl px-3 py-2 text-sm" onClick={() => fileRef.current?.click()}>
+            <i className="fa-solid fa-paperclip mr-2"></i>Carica
+          </button>
+          <input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden" onChange={(e)=> onPick(e.target.files?.[0] || null)} />
+          <div className="text-sm text-white/70 truncate">{valueName || "—"}</div>
+        </div>
+      );
+    };
+
+    const GenericItemForm = ({ kind, vehicles, suppliers, initial, onSave, onCancel }) => {
+      // kind: 'accident' | 'maintenance' | 'bill'
+      const base = () => {
+        const plate = normalizePlate(initial?.plate || "");
+        if (kind === "accident") return { 
+          id: uid(), plate, date: todayISO(), startDate: "", endDate: "", 
+          description:"", cost:"", insuranceReimbursement: "", supplierId:"", 
+          notes: "", status: "aperto", attachments: []
+        };
+        if (kind === "maintenance") return { 
+          id: uid(), plate, date: todayISO(), startDate: "", endDate: "", 
+          type:"", km:"", cost:"", insuranceReimbursement: "", supplierId:"", 
+          notes:"", status: "aperto", attachments: []
+        };
+        return { id: uid(), plate, type:"Bollo", dueDate: todayISO(), amount:"", paid:false, attachmentName:"", attachmentData:"" };
+      };
+
+      const [it, setIt] = useState(() => {
+        const merged = { ...base(), ...(initial||{}) };
+        // Migrazione vecchi attachments
+        if (!merged.attachments) merged.attachments = [];
+        if (merged.attachmentName && merged.attachmentData && merged.attachments.length === 0) {
+          merged.attachments = [{ id: uid(), name: merged.attachmentName, data: merged.attachmentData }];
+        }
+        return merged;
+      });
+      const set = (k,v) => setIt(prev => ({...prev,[k]:v}));
+
+      const plateOk = normalizePlate(it.plate);
+      const err = !plateOk ? "Seleziona una targa." : null;
+
+      const pickAttachment = async (file) => {
+        if (!file) return;
+        const data = await readFileAsDataURL(file);
+        const newAtt = { id: uid(), name: file.name, data };
+        setIt(prev => ({...prev, attachments: [...(prev.attachments || []), newAtt]}));
+      };
+
+      const removeAttachment = (attId) => {
+        setIt(prev => ({...prev, attachments: (prev.attachments || []).filter(a => a.id !== attId)}));
+      };
+      const openAttachment = (attachmentData) => {
+        if (!attachmentData) return;
+        const a = document.createElement("a");
+        a.href = attachmentData;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        // for safety: trigger click
+        a.click();
+      };
+
+      const attachmentIcon = (att) => {
+        const data = String(att?.data || "");
+        const name = String(att?.name || "");
+        const isPdf = data.startsWith("data:application/pdf") || name.toLowerCase().endsWith(".pdf");
+        const isImg = data.startsWith("data:image/") || /\.(png|jpe?g|webp|gif)$/i.test(name);
+        if (isImg) return <i className="fa-regular fa-image text-sky-300"></i>;
+        if (isPdf) return <i className="fa-solid fa-file-pdf text-red-400"></i>;
+        return <i className="fa-regular fa-file text-white/60"></i>;
+      };
+
+
+      const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.localeCompare(b.name)), [suppliers]);
+
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Field label="Targa *">
+              <SearchableSelect 
+                vehicles={vehicles}
+                value={it.plate || ""}
+                onChange={(plate) => set("plate", plate)}
+              />
+            </Field>
+
+            {kind !== "bill" ? (
+              <Field label="Data evento">
+                <input type="date" className="w-full px-3 py-2 rounded-xl" value={it.date || ""} onChange={e=>set("date", e.target.value)} />
+              </Field>
+            ) : (
+              <Field label="Scadenza">
+                <input type="date" className="w-full px-3 py-2 rounded-xl" value={it.dueDate || ""} onChange={e=>set("dueDate", e.target.value)} />
+              </Field>
+            )}
+
+            {kind === "bill" ? (
+              <Field label="Tipo (es. Bollo, Assicurazione, Revisione)">
+                <input className="w-full px-3 py-2 rounded-xl" value={it.type || ""} onChange={e=>set("type", e.target.value)} />
+              </Field>
+            ) : kind === "maintenance" ? (
+              <Field label="Tipo manutenzione">
+                <input className="w-full px-3 py-2 rounded-xl" value={it.type || ""} onChange={e=>set("type", e.target.value)} placeholder="tagliando, gomme, freni..." />
+              </Field>
+            ) : (
+              <Field label="Descrizione breve">
+                <input className="w-full px-3 py-2 rounded-xl" value={it.description || ""} onChange={e=>set("description", e.target.value)} />
+              </Field>
+            )}
+          </div>
+
+          {kind !== "bill" && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Field label="Data inizio" hint="Quando è iniziato l'intervento/sinistro">
+                <input type="date" className="w-full px-3 py-2 rounded-xl" value={it.startDate || ""} onChange={e=>set("startDate", e.target.value)} />
+              </Field>
+              <Field label="Data fine" hint="Quando è terminato l'intervento/sinistro">
+                <input type="date" className="w-full px-3 py-2 rounded-xl" value={it.endDate || ""} onChange={e=>set("endDate", e.target.value)} />
+              </Field>
+              <Field label="Stato">
+                <select className="w-full px-3 py-2 rounded-xl" value={it.status || "aperto"} onChange={e=>set("status", e.target.value)}>
+                  <option value="aperto">Aperto</option>
+                  <option value="chiuso">Chiuso</option>
+                </select>
+              </Field>
+            </div>
+          )}
+
+          {kind === "maintenance" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field label="KM (al momento)">
+                <input className="w-full px-3 py-2 rounded-xl" value={it.km || ""} onChange={e=>set("km", e.target.value)} />
+              </Field>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {kind !== "bill" ? (
+              <>
+                <Field label="Costo">
+                  <input className="w-full px-3 py-2 rounded-xl" value={it.cost || ""} onChange={e=>set("cost", e.target.value)} placeholder="€" />
+                </Field>
+                <Field label="Rimborso assicurazione">
+                  <input className="w-full px-3 py-2 rounded-xl" value={it.insuranceReimbursement || ""} onChange={e=>set("insuranceReimbursement", e.target.value)} placeholder="€" />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Importo">
+                  <input className="w-full px-3 py-2 rounded-xl" value={it.amount || ""} onChange={e=>set("amount", e.target.value)} placeholder="€" />
+                </Field>
+                <Field label="Pagato">
+                  <div className="pt-2">
+                    <label className="inline-flex items-center gap-2 text-sm text-white/80">
+                      <input type="checkbox" checked={!!it.paid} onChange={e=>set("paid", e.target.checked)} />
+                      Segna come pagato
+                    </label>
+                  </div>
+                </Field>
+              </>
+            )}
+
+            <Field label="Fornitore">
+              <select className="w-full px-3 py-2 rounded-xl" value={it.supplierId || ""} onChange={e=>set("supplierId", e.target.value)}>
+                <option value="">—</option>
+                {supplierOptions.map(s => <option key={s.id} value={s.id}>{s.name}{s.type ? " — " + s.type : ""}</option>)}
+              </select>
+            </Field>
+          </div>
+
+          {kind !== "bill" && (
+            <Field label="Note">
+              <textarea 
+                className="w-full px-3 py-2 rounded-xl min-h-[120px]" 
+                value={kind === "accident" ? (it.notes || it.description || "") : (it.notes || "")} 
+                onChange={e=>set("notes", e.target.value)} 
+                placeholder="Inserisci note dettagliate..."
+              />
+            </Field>
+          )}
+
+          {kind !== "bill" && (
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="font-semibold">Allegati</div>
+                <button 
+                  type="button"
+                  className="btn rounded-xl px-3 py-2 text-sm" 
+                  onClick={() => document.getElementById('file-input-' + it.id)?.click()}
+                >
+                  <i className="fa-solid fa-paperclip mr-2"></i>Aggiungi file
+                </button>
+                <input 
+                  id={'file-input-' + it.id}
+                  type="file" 
+                  accept="application/pdf,image/*" 
+                  className="hidden" 
+                  onChange={(e)=> {
+                    const f = e.target.files?.[0];
+                    if (f) pickAttachment(f);
+                    e.target.value = "";
+                  }} 
+                />
+              </div>
+              {(it.attachments || []).length > 0 ? (
+                <div className="space-y-2">
+                  {(it.attachments || []).map(att => (
+                    <div key={att.id} className="flex items-center justify-between gap-3 p-2 rounded-xl bg-white/5 border border-white/10">
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 truncate flex-1 text-left hover:opacity-90"
+                        onClick={() => openAttachment(att.data)}
+                        title="Apri"
+                      >
+                        {attachmentIcon(att)}
+                        <span className="text-sm truncate underline decoration-white/20 underline-offset-2">{att.name}</span>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="btn rounded-xl px-2 py-1 text-xs"
+                          onClick={() => openAttachment(att.data)}
+                          title="Apri"
+                        >
+                          <i className="fa-solid fa-arrow-up-right-from-square"></i>
+                        </button>
+                        <button 
+                          type="button"
+                          className="btn rounded-xl px-2 py-1 text-xs" 
+                          onClick={() => removeAttachment(att.id)}
+                          title="Rimuovi"
+                        >
+                          <i className="fa-solid fa-trash"></i>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-white/60">Nessun allegato.</div>
+              )}
+            </div>
+          )}
+
+          {err ? <div className="text-rose-200 text-sm">{err}</div> : null}
+
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn rounded-xl px-4 py-2" onClick={onCancel}>Annulla</button>
+            <button
+              type="button"
+              className={"rounded-xl px-4 py-2 bg-purple-500/70 hover:bg-purple-500/90 border border-purple-300/30 " + (err ? "opacity-50 cursor-not-allowed" : "")}
+              disabled={!!err}
+              onClick={() => {
+                if (err) return;
+                const payload = { ...it, plate: normalizePlate(it.plate) };
+                if (kind === "accident") {
+                  payload.cost = parseNum(payload.cost);
+                  payload.insuranceReimbursement = parseNum(payload.insuranceReimbursement);
+                }
+                if (kind === "maintenance") { 
+                  payload.cost = parseNum(payload.cost); 
+                  payload.insuranceReimbursement = parseNum(payload.insuranceReimbursement);
+                  payload.km = parseNum(payload.km); 
+                }
+                if (kind === "bill") payload.amount = parseNum(payload.amount);
+                onSave(payload);
+              }}
+            >
+              Salva
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ---------- Vehicle Summary ----------
+    const VehicleSummary = ({ plate, data, onClose }) => {
+      const vehicle = data.vehicles.find(v => v.plate === plate);
+      const accidents = data.accidents.filter(a => a.plate === plate).sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+      const maints = data.maintenances.filter(m => m.plate === plate).sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+      const bills = data.bills.filter(b => b.plate === plate).sort((a,b)=> (a.dueDate||"").localeCompare(b.dueDate||""));
+
+      const totalAcc = accidents.reduce((s,a)=> s + (parseNum(a.cost)||0), 0);
+      const totalMaint = maints.reduce((s,m)=> s + (parseNum(m.cost)||0), 0);
+      const totalBills = bills.reduce((s,b)=> s + (parseNum(b.amount)||0), 0);
+
+      const upcoming = bills
+        .filter(b => !b.paid && daysUntil(b.dueDate) !== null && daysUntil(b.dueDate) <= 60)
+        .map(b => ({...b, inDays: daysUntil(b.dueDate)}))
+        .sort((a,b)=> a.inDays - b.inDays);
+
+      const availabilityToday = vehicle ? isVehicleAvailableOn(vehicle, todayISO()) : false;
+
+      const supplierById = useMemo(() => Object.fromEntries(data.suppliers.map(s=>[s.id,s])), [data.suppliers]);
+
+      const [openAccList, setOpenAccList] = useState(false);
+      const [openMaintList, setOpenMaintList] = useState(false);
+
+      const openAttachment = (attachmentData) => {
+        if (!attachmentData) return;
+        const a = document.createElement("a");
+        a.href = attachmentData;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        a.click();
+      };
+
+      
+
+      return (
+        <Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
+          {!vehicle ? (
+            <div className="text-white/70">Veicolo non trovato.</div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="glass rounded-2xl p-4">
+                  <div className="text-xs text-white/60">Veicolo</div>
+                  <div className="text-lg font-semibold mt-1">{vehicle.brand} {vehicle.model}</div>
+                  <div className="text-sm text-white/70 mt-1">
+                    {vehicle.year ? vehicle.year + " · " : ""}{vehicle.category || ""}
+                  </div>
+                  <div className="mt-3 flex gap-2 flex-wrap">
+                    {availabilityToday ? <Badge tone="good">Disponibile oggi</Badge> : <Badge tone="bad">Non disponibile oggi</Badge>}
+                    {vehicle.hub ? <Badge tone="info">{vehicle.hub}</Badge> : null}
+                    {vehicle.group ? <Badge tone="neutral">{vehicle.group}</Badge> : null}
+                  </div>
+                  <div className="mt-3 text-xs text-white/55 space-y-1">
+                    <div><span className="text-white/70">VIN:</span> {vehicle.vin || "—"}</div>
+                    <div><span className="text-white/70">KM:</span> {vehicle.km ?? "—"}</div>
+                    <div><span className="text-white/70">Disponibilità:</span> {vehicle.availabilityStart || "—"} → {vehicle.availabilityEnd || "—"}</div>
+                    <div className="mt-1"><span className="text-white/70">Stato (oggi):</span> {statusBadge(computeVehicleStatusOn(vehicle, todayISO()))}</div>
+
+                    {normalizePeriods(vehicle.periods).length ? (
+                      <div className="mt-3">
+                        <div className="text-xs text-white/60 mb-1">Timeline</div>
+                        <div className="space-y-1">
+                          {normalizePeriods(vehicle.periods)
+                            .slice()
+                            .sort((a,b)=> String(a.start||"").localeCompare(String(b.start||"")))
+                            .map(p => (
+                              <div key={p.id} className="text-xs text-white/70 flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  {statusBadge(p.status)}
+                                  <span className="text-white/60">{p.start || "—"} → {p.end || "—"}</span>
+                                  {p.notes ? <span className="text-white/50">· {p.notes}</span> : null}
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="glass rounded-2xl p-4">
+                  <div className="text-xs text-white/60">KPI costi (totali)</div>
+                  <div className="mt-2 space-y-2 text-sm">
+                    <div className="flex justify-between"><span className="text-white/70">Sinistri</span><span className="font-semibold">{fmtEUR(totalAcc)}</span></div>
+                    <div className="flex justify-between"><span className="text-white/70">Manutenzioni</span><span className="font-semibold">{fmtEUR(totalMaint)}</span></div>
+                    <div className="flex justify-between"><span className="text-white/70">Scadenze/Bolli</span><span className="font-semibold">{fmtEUR(totalBills)}</span></div>
+                    <Divider />
+                    <div className="flex justify-between"><span className="text-white/70">Totale</span><span className="font-semibold">{fmtEUR(totalAcc + totalMaint + totalBills)}</span></div>
+                    <div className="text-xs text-white/55">
+                      {vehicle.km ? (
+                        <>Costo/KM (indicativo): <span className="text-white/80">{fmtEUR((totalAcc + totalMaint + totalBills) / Math.max(1, vehicle.km))}</span></>
+                      ) : "Inserisci KM veicolo per costo/KM."}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass rounded-2xl p-4">
+                  <div className="text-xs text-white/60">Scadenze imminenti (≤ 60 giorni)</div>
+                  <div className="mt-2 space-y-2">
+                    {upcoming.length === 0 ? (
+                      <div className="text-sm text-white/70">Nessuna scadenza vicina.</div>
+                    ) : upcoming.slice(0,8).map(b => (
+                      <div key={b.id} className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold">{b.type || "Scadenza"}</div>
+                          <div className="text-xs text-white/60">{b.dueDate} · {fmtEUR(b.amount)}</div>
+                        </div>
+                        <div>
+                          {b.inDays < 0 ? <Badge tone="bad">Scaduto</Badge> :
+                           b.inDays <= 7 ? <Badge tone="bad">≤ 7g</Badge> :
+                           b.inDays <= 30 ? <Badge tone="warn">≤ 30g</Badge> :
+                           <Badge tone="info">≤ 60g</Badge>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="glass rounded-2xl p-4">
+                  <button className="font-semibold mb-2 underline decoration-white/20 hover:decoration-white/60" onClick={()=>setOpenAccList(true)}>Sinistri</button>
+                  <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
+                    {accidents.length === 0 ? <div className="text-sm text-white/70">—</div> :
+                      accidents.map(a => (
+                        <div key={a.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="text-sm font-semibold">{a.date || "—"}</div>
+                              {(a.startDate || a.endDate) && (
+                                <div className="text-xs text-white/50">{a.startDate || '—'} → {a.endDate || '—'}</div>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              {a.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>}
+                              <div className="text-sm">{fmtEUR(a.cost)}</div>
+                              {a.insuranceReimbursement ? (
+                                <div className="text-xs text-emerald-300">-{fmtEUR(a.insuranceReimbursement)}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                          {a.notes && <div className="text-xs text-white/60 mt-2 line-clamp-2">{a.notes}</div>}
+                          <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
+                            <span>{a.supplierId && supplierById[a.supplierId] ? supplierById[a.supplierId].name : ""}</span>
+                          </div>
+                          {(a.attachments && a.attachments.length > 0) && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {a.attachments.map(att => (
+                                <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                                  <i className="fa-solid fa-file-pdf mr-1"></i>{att.name.length > 15 ? att.name.substring(0,12)+'...' : att.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+
+                <div className="glass rounded-2xl p-4">
+                  <button className="font-semibold mb-2 underline decoration-white/20 hover:decoration-white/60" onClick={()=>setOpenMaintList(true)}>Manutenzioni</button>
+                  <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
+                    {maints.length === 0 ? <div className="text-sm text-white/70">—</div> :
+                      maints.map(m => (
+                        <div key={m.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="text-sm font-semibold">{m.type || "Manutenzione"}</div>
+                              <div className="text-xs text-white/60">{m.date || "—"}</div>
+                              {(m.startDate || m.endDate) && (
+                                <div className="text-xs text-white/50">{m.startDate || '—'} → {m.endDate || '—'}</div>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              {m.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>}
+                              <div className="text-sm">{fmtEUR(m.cost)}</div>
+                              {m.insuranceReimbursement ? (
+                                <div className="text-xs text-emerald-300">-{fmtEUR(m.insuranceReimbursement)}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                          {m.km ? <div className="text-xs text-white/60 mt-1">KM: {m.km}</div> : null}
+                          {m.notes && <div className="text-xs text-white/60 mt-1 line-clamp-2">{m.notes}</div>}
+                          <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
+                            <span>{m.supplierId && supplierById[m.supplierId] ? supplierById[m.supplierId].name : ""}</span>
+                          </div>
+                          {(m.attachments && m.attachments.length > 0) && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {m.attachments.map(att => (
+                                <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                                  <i className="fa-solid fa-file-pdf mr-1"></i>{att.name.length > 15 ? att.name.substring(0,12)+'...' : att.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+
+                <div className="glass rounded-2xl p-4">
+                  <button className="font-semibold mb-2 underline decoration-white/20 hover:decoration-white/60" onClick={()=>setOpenMaintList(true)}>Manutenzioni</button>
+                  <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
+                    {maints.length === 0 ? <div className="text-sm text-white/70">—</div> :
+                      maints.map(m => (
+                        <div key={m.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="text-sm font-semibold">{m.type || "Manutenzione"}</div>
+                              <div className="text-xs text-white/60">{m.date || "—"}</div>
+                              {(m.startDate || m.endDate) && (
+                                <div className="text-xs text-white/50">{m.startDate || '—'} → {m.endDate || '—'}</div>
+                              )}
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              {m.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>}
+                              <div className="text-sm">{fmtEUR(m.cost)}</div>
+                              {m.insuranceReimbursement ? (
+                                <div className="text-xs text-emerald-300">-{fmtEUR(m.insuranceReimbursement)}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                          {m.km ? <div className="text-xs text-white/60 mt-1">KM: {m.km}</div> : null}
+                          {m.notes && <div className="text-xs text-white/60 mt-1 line-clamp-2">{m.notes}</div>}
+                          <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
+                            <span>{m.supplierId && supplierById[m.supplierId] ? supplierById[m.supplierId].name : ""}</span>
+                          </div>
+                          {(m.attachments && m.attachments.length > 0) && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {m.attachments.map(att => (
+                                <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                                  <i className="fa-solid fa-file-pdf mr-1"></i>{att.name.length > 15 ? att.name.substring(0,12)+'...' : att.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+
+                <div className="glass rounded-2xl p-4">
+                  <div className="font-semibold mb-2">Bolli / Scadenze</div>
+                  <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
+                    {bills.length === 0 ? <div className="text-sm text-white/70">—</div> :
+                      bills.map(b => {
+                        const d = daysUntil(b.dueDate);
+                        const tone = b.paid ? "good" : (d === null ? "neutral" : (d < 0 ? "bad" : (d <= 7 ? "bad" : (d <= 30 ? "warn" : "info"))));
+                        return (
+                          <div key={b.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                            <div className="flex justify-between items-start gap-2">
+                              <div>
+                                <div className="text-sm font-semibold">{b.type || "Scadenza"}</div>
+                                <div className="text-xs text-white/60">{b.dueDate || "—"} · {fmtEUR(b.amount)}</div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {b.paid ? <Badge tone="good">Pagato</Badge> : <Badge tone={tone}>{d !== null ? (d<0 ? "Scaduto" : d + "g") : "—"}</Badge>}
+                              </div>
+                            </div>
+                            <div className="text-xs text-white/55 mt-2 flex items-center justify-between">
+                              <span>{b.supplierId && supplierById[b.supplierId] ? supplierById[b.supplierId].name : ""}</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    }
+                  </div>
+                </div>
+              </div>
+
+              {vehicle.notes ? (
+                <div className="glass rounded-2xl p-4">
+                  <div className="font-semibold mb-2">Note veicolo</div>
+                  <div className="text-sm text-white/75 whitespace-pre-wrap">{vehicle.notes}</div>
+                </div>
+              ) : null}
+            </div>
+          )}
+          {/* Elenchi dettagliati */}
+          <Modal open={openAccList} wide title={"Sinistri — " + plate} onClose={()=>setOpenAccList(false)}>
+            <Table
+              columns={[
+                { key:"date", label:"Data" },
+                { key:"period", label:"Periodo", render:(a)=> (a.startDate || a.endDate) ? `${a.startDate || '—'} → ${a.endDate || '—'}` : '—' },
+                { key:"status", label:"Stato", render:(a)=> (a.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>) },
+                { key:"description", label:"Descrizione", render:(a)=> <div className="max-w-xs truncate" title={a.notes || a.description}>{a.notes || a.description || '—'}</div> },
+                { key:"cost", label:"Costo", render:(a)=> fmtEUR(a.cost) },
+                { key:"attachments", label:"PDF", render:(a)=> {
+                    const atts = (a.attachments && a.attachments.length) ? a.attachments
+                      : (a.attachmentName && a.attachmentData ? [{ id:"legacy", name:a.attachmentName, data:a.attachmentData }] : []);
+                    return atts.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {atts.map(att => (
+                          <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                            <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
+                          </button>
+                        ))}
+                      </div>
+                    ) : '—';
+                  } 
+                },
+              ]}
+              rows={accidents}
+              rowKey={(r)=>r.id}
+              emptyText="Nessun sinistro per questo veicolo."
+            />
+          </Modal>
+
+          <Modal open={openMaintList} wide title={"Manutenzioni — " + plate} onClose={()=>setOpenMaintList(false)}>
+            <Table
+              columns={[
+                { key:"date", label:"Data" },
+                { key:"period", label:"Periodo", render:(m)=> (m.startDate || m.endDate) ? `${m.startDate || '—'} → ${m.endDate || '—'}` : '—' },
+                { key:"status", label:"Stato", render:(m)=> (m.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>) },
+                { key:"type", label:"Tipo" },
+                { key:"km", label:"KM" },
+                { key:"cost", label:"Costo", render:(m)=> fmtEUR(m.cost) },
+                { key:"attachments", label:"PDF", render:(m)=> {
+                    const atts = (m.attachments && m.attachments.length) ? m.attachments
+                      : (m.attachmentName && m.attachmentData ? [{ id:"legacy", name:m.attachmentName, data:m.attachmentData }] : []);
+                    return atts.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {atts.map(att => (
+                          <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                            <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
+                          </button>
+                        ))}
+                      </div>
+                    ) : '—';
+                  } 
+                },
+              ]}
+              rows={maints}
+              rowKey={(r)=>r.id}
+              emptyText="Nessuna manutenzione per questo veicolo."
+            />
+          </Modal>
+
+        </Modal>
+      );
+    };
+
+    // ---------- Import / Export ----------
+    const buildTemplateWorkbook = () => {
+      const wb = XLSX.utils.book_new();
+
+      const vehicles = [
+        ["plate","brand","model","year","category","hub","group","vin","km","availabilityStart","availabilityEnd","notes"],
+        ["AB123CD","Range Rover","Sport","2025","SUV","Roma","Primerent","VIN123...","24500","2026-01-01","2026-12-31","Note interne..."]
+      ];
+      const accidents = [
+        ["plate","date","startDate","endDate","status","description","location","cost","insuranceReimbursement","notes","supplierName","supplierType","attachmentName","attachmentData"],
+        ["AB123CD","2026-02-01","2026-02-01","2026-02-10","aperto","Graffio paraurti","Roma","350","0","Note interne...","Carrozzeria Rossi","Carrozzeria","",""]
+      ];
+      const maints = [
+        ["plate","date","startDate","endDate","status","type","km","cost","insuranceReimbursement","notes","supplierName","supplierType","attachmentName","attachmentData"],
+        ["AB123CD","2026-01-15","2026-01-15","2026-01-16","chiuso","Tagliando","24000","650","0","Filtro olio, controlli...","Officina Bianchi","Officina","",""]
+      ];
+      const bills = [
+        ["plate","type","dueDate","amount","paid","supplierName","supplierType","notes"],
+        ["AB123CD","Bollo","2026-03-31","980","FALSE","ACI","Ente",""]
+      ];
+      const suppliers = [
+        ["name","type","phone","email","notes"],
+        ["Officina Bianchi","Officina","+39...","info@...",""]
+      ];
+
+      const addSheet = (name, aoa) => {
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+
+      addSheet("Vehicles", vehicles);
+      addSheet("Accidents", accidents);
+      addSheet("Maintenances", maints);
+      addSheet("Bills", bills);
+      addSheet("Suppliers", suppliers);
+
+      return wb;
+    };
+
+    const ExportImportPanel = ({ data, setData, toast }) => {
+      const [replaceMode, setReplaceMode] = useState(false);
+
+      const exportJSON = () => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        downloadBlob(blob, "fleet-manager-backup.json");
+        toast("Backup JSON scaricato.");
+      };
+
+      const importJSON = async (file) => {
+        if (!file) return;
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object") throw new Error("File non valido.");
+        setData(prev => replaceMode ? ({...defaultData, ...parsed}) : mergeData(prev, parsed));
+        toast(replaceMode ? "Import JSON (sostituzione) completato." : "Import JSON (merge) completato.");
+      };
+
+      const exportExcel = () => {
+        const wb = XLSX.utils.book_new();
+        const sheetFromRows = (rows) => XLSX.utils.json_to_sheet(rows);
+
+        XLSX.utils.book_append_sheet(wb, sheetFromRows(data.vehicles), "Vehicles");
+        XLSX.utils.book_append_sheet(wb, sheetFromRows(data.accidents), "Accidents");
+        XLSX.utils.book_append_sheet(wb, sheetFromRows(data.maintenances), "Maintenances");
+        XLSX.utils.book_append_sheet(wb, sheetFromRows(data.bills), "Bills");
+        XLSX.utils.book_append_sheet(wb, sheetFromRows(data.suppliers), "Suppliers");
+
+        XLSX.writeFile(wb, "fleet-manager-export.xlsx");
+        toast("Export Excel generato.");
+      };
+
+      const downloadTemplate = () => {
+        const wb = buildTemplateWorkbook();
+        XLSX.writeFile(wb, "FleetManager_Template_Import.xlsx");
+      };
+
+      const mergeData = (base, incoming) => {
+        // Merge by id if present, else by plate+date/type etc.
+        const mergeById = (arrBase, arrIn) => {
+          const map = new Map(arrBase.map(x => [x.id, x]));
+          for (const x of arrIn || []) {
+            if (x && x.id && map.has(x.id)) map.set(x.id, { ...map.get(x.id), ...x });
+            else map.set(x.id || uid(), { ...x, id: x.id || uid() });
+          }
+          return Array.from(map.values());
+        };
+        return {
+          ...base,
+          vehicles: mergeById(base.vehicles, incoming.vehicles),
+          accidents: mergeById(base.accidents, incoming.accidents),
+          maintenances: mergeById(base.maintenances, incoming.maintenances),
+          bills: mergeById(base.bills, incoming.bills),
+          suppliers: mergeById(base.suppliers, incoming.suppliers),
+        };
+      };
+
+      const importExcel = async (file) => {
+        if (!file) return;
+        const ab = await readFileAsArrayBuffer(file);
+        const wb = XLSX.read(ab, { type: "array" });
+
+        const getSheetJSON = (name) => {
+          const ws = wb.Sheets[name];
+          if (!ws) return [];
+          return XLSX.utils.sheet_to_json(ws, { defval: "" });
+        };
+
+        const supRows = getSheetJSON("Suppliers");
+        const ensureSupplier = (name, type) => {
+          if (!name) return "";
+          const n = String(name).trim();
+          if (!n) return "";
+          // match existing by name+type
+          const existing = data.suppliers.find(s => (s.name||"").trim().toLowerCase() === n.toLowerCase() && (String(s.type||"").trim().toLowerCase() === String(type||"").trim().toLowerCase()));
+          if (existing) return existing.id;
+          // create
+          const created = { id: uid(), name: n, type: String(type||"").trim(), phone:"", email:"", notes:"" };
+          setData(prev => ({...prev, suppliers: [...prev.suppliers, created]}));
+          return created.id;
+        };
+
+        // First load suppliers sheet (also merge)
+        const normalizeSupplierRows = supRows.map(r => ({
+          id: uid(),
+          name: String(r.name||"").trim(),
+          type: String(r.type||"").trim(),
+          phone: String(r.phone||"").trim(),
+          email: String(r.email||"").trim(),
+          notes: String(r.notes||"").trim(),
+        })).filter(s => s.name);
+
+        // Merge suppliers into state synchronously
+        let nextSuppliers = [...data.suppliers];
+        for (const s of normalizeSupplierRows) {
+          const exists = nextSuppliers.find(x => x.name.toLowerCase() === s.name.toLowerCase() && (x.type||"").toLowerCase() === (s.type||"").toLowerCase());
+          if (!exists) nextSuppliers.push(s);
+        }
+
+        const vehiclesRows = getSheetJSON("Vehicles");
+        const vNorm = vehiclesRows.map(r => ({
+          id: uid(),
+          plate: normalizePlate(r.plate),
+          brand: String(r.brand||"").trim(),
+          model: String(r.model||"").trim(),
+          year: String(r.year||"").trim(),
+          category: String(r.category||"").trim(),
+          hub: String(r.hub||"").trim(),
+          group: String(r.group||"").trim(),
+          vin: String(r.vin||"").trim(),
+          km: parseNum(r.km),
+          availabilityStart: excelSerialToISO(r.availabilityStart),
+          availabilityEnd: excelSerialToISO(r.availabilityEnd),
+          notes: String(r.notes||"").trim(),
+        })).filter(v => v.plate);
+
+        const accRows = getSheetJSON("Accidents");
+        const aNorm = accRows.map(r => ({
+          id: uid(),
+          plate: normalizePlate(r.plate),
+          date: excelSerialToISO(r.date) || String(r.date||"").trim(),
+          startDate: excelSerialToISO(r.startDate) || String(r.startDate||"").trim(),
+          endDate: excelSerialToISO(r.endDate) || String(r.endDate||"").trim(),
+          status: String(r.status||"aperto").trim() || "aperto",
+          description: String(r.description||"").trim(),
+          location: String(r.location||"").trim(),
+          cost: parseNum(r.cost),
+          insuranceReimbursement: parseNum(r.insuranceReimbursement),
+          notes: String(r.notes||"").trim(),
+          supplierId: "",
+          attachmentName: String(r.attachmentName||"").trim(),
+          attachmentData: String(r.attachmentData||"").trim()
+        })).filter(a => a.plate);
+
+        const mRows = getSheetJSON("Maintenances");
+        const mNorm = mRows.map(r => ({
+          id: uid(),
+          plate: normalizePlate(r.plate),
+          date: excelSerialToISO(r.date) || String(r.date||"").trim(),
+          startDate: excelSerialToISO(r.startDate) || String(r.startDate||"").trim(),
+          endDate: excelSerialToISO(r.endDate) || String(r.endDate||"").trim(),
+          status: String(r.status||"aperto").trim() || "aperto",
+          type: String(r.type||"").trim(),
+          km: parseNum(r.km),
+          cost: parseNum(r.cost),
+          insuranceReimbursement: parseNum(r.insuranceReimbursement),
+          notes: String(r.notes||"").trim(),
+          supplierId: "",
+          attachmentName: String(r.attachmentName||"").trim(),
+          attachmentData: String(r.attachmentData||"").trim()
+        })).filter(m => m.plate);
+
+        const bRows = getSheetJSON("Bills");
+        const bNorm = bRows.map(r => ({
+          id: uid(),
+          plate: normalizePlate(r.plate),
+          type: String(r.type||"").trim(),
+          dueDate: String(r.dueDate||"").trim(),
+          amount: parseNum(r.amount),
+          paid: String(r.paid||"").toUpperCase() === "TRUE" || r.paid === true || r.paid === 1,
+          supplierId: "",
+          notes: String(r.notes||"").trim(),
+          attachmentName:"",
+          attachmentData:""
+        })).filter(b => b.plate);
+
+        // Supplier mapping by supplierName/type columns (optional)
+        const findOrCreateSupplierId = (supplierName, supplierType) => {
+          const n = String(supplierName||"").trim();
+          const t = String(supplierType||"").trim();
+          if (!n) return "";
+          const existing = nextSuppliers.find(s => s.name.toLowerCase() === n.toLowerCase() && (s.type||"").toLowerCase() === t.toLowerCase());
+          if (existing) return existing.id;
+          const created = { id: uid(), name: n, type: t, phone:"", email:"", notes:"" };
+          nextSuppliers.push(created);
+          return created.id;
+        };
+
+        // Enrich supplierId from optional cols
+        for (const r of accRows) {
+          const plate = normalizePlate(r.plate);
+          const match = aNorm.find(x => x.plate === plate && x.date === String(r.date||"").trim() && x.description === String(r.description||"").trim());
+          if (match) match.supplierId = findOrCreateSupplierId(r.supplierName, r.supplierType);
+        }
+        for (const r of mRows) {
+          const plate = normalizePlate(r.plate);
+          const match = mNorm.find(x => x.plate === plate && x.date === String(r.date||"").trim() && x.type === String(r.type||"").trim());
+          if (match) match.supplierId = findOrCreateSupplierId(r.supplierName, r.supplierType);
+        }
+        for (const r of bRows) {
+          const plate = normalizePlate(r.plate);
+          const match = bNorm.find(x => x.plate === plate && x.dueDate === String(r.dueDate||"").trim() && x.type === String(r.type||"").trim());
+          if (match) match.supplierId = findOrCreateSupplierId(r.supplierName, r.supplierType);
+        }
+
+        const merged = (prev, incomingArr, keyFn) => {
+          const map = new Map(prev.map(x => [keyFn(x), x]));
+          for (const x of incomingArr) {
+            const k = keyFn(x);
+            if (!map.has(k)) map.set(k, x);
+          }
+          return Array.from(map.values());
+        };
+
+        setData(prev => {
+          const vehicles = replaceMode ? vNorm : merged(prev.vehicles, vNorm, v => v.plate);
+          const accidents = replaceMode ? aNorm : merged(prev.accidents, aNorm, a => a.plate + "|" + (a.date||"") + "|" + (a.description||""));
+          const maints = replaceMode ? mNorm : merged(prev.maintenances, mNorm, m => m.plate + "|" + (m.date||"") + "|" + (m.type||""));
+          const bills = replaceMode ? bNorm : merged(prev.bills, bNorm, b => b.plate + "|" + (b.dueDate||"") + "|" + (b.type||""));
+          const suppliers = replaceMode ? nextSuppliers : merged(prev.suppliers, nextSuppliers, s => (s.name||"").toLowerCase()+"|"+(s.type||"").toLowerCase());
+          return { ...prev, vehicles, accidents, maintenances: maints, bills, suppliers };
+        });
+
+        toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
+      };
+
+      const jsonRef = useRef(null);
+      const xlsxRef = useRef(null);
+
+      return (
+        <div className="space-y-4">
+          <DataBar>
+            <div>
+              <div className="font-semibold">Import / Export</div>
+              <div className="text-xs text-white/60">Backup, export, e caricamento dati da tracciato Excel.</div>
+            </div>
+            <label className="inline-flex items-center gap-2 text-sm text-white/80">
+              <input type="checkbox" checked={replaceMode} onChange={e=>setReplaceMode(e.target.checked)} />
+              Modalità <span className="font-semibold">Sostituisci</span> (altrimenti Merge)
+            </label>
+          </DataBar>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="font-semibold">Template Excel (Tracciato)</div>
+              <div className="text-sm text-white/70">
+                Scarica il tracciato, compila in Excel, poi ricarica qui.
+              </div>
+              <button className="btn rounded-xl px-4 py-2 w-fit" onClick={downloadTemplate}>
+                <i className="fa-solid fa-download mr-2"></i>Scarica template
+              </button>
+              <div className="text-xs text-white/50">Sheets: Vehicles, Accidents, Maintenances, Bills, Suppliers.</div>
+            </div>
+
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="font-semibold">Import Excel</div>
+              <div className="text-sm text-white/70">Carica un .xlsx conforme al template.</div>
+              <div className="flex gap-2 flex-wrap items-center">
+  <label className="btn rounded-xl px-4 py-2 inline-flex items-center gap-2 cursor-pointer select-none">
+    <i className="fa-solid fa-upload"></i>
+    <span>Carica .xlsx</span>
+    <input
+      ref={xlsxRef}
+      type="file"
+      accept=".xlsx"
+      className="hidden"
+      onChange={async (e)=>{{
+        try{{
+          const f = e.target.files?.[0];
+          if (f) await importExcel(f);
+        }} catch(err){{
+          alert("Errore import: " + (err?.message || err));
+        }} finally {{
+          e.target.value = "";
+        }}
+      }}}
+    />
+  </label>
+  <span className="text-xs text-white/60">Dopo la selezione, l'import parte automaticamente.</span>
+</div>
+              <div className="text-xs text-white/50">Suggerimento: per sostituire tutto attiva “Sostituisci”.</div>
+            </div>
+
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="font-semibold">Export Excel</div>
+              <div className="text-sm text-white/70">Esporta tutti i dati in un unico file .xlsx.</div>
+              <button className="btn rounded-xl px-4 py-2 w-fit" onClick={exportExcel}>
+                <i className="fa-solid fa-file-excel mr-2"></i>Esporta .xlsx
+              </button>
+            </div>
+
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="font-semibold">Backup JSON</div>
+              <div className="text-sm text-white/70">Backup completo + import (merge/sostituzione).</div>
+              <div className="flex gap-2 flex-wrap">
+                <button className="btn rounded-xl px-4 py-2" onClick={exportJSON}>
+                  <i className="fa-solid fa-database mr-2"></i>Scarica backup
+                </button>
+                <button className="btn rounded-xl px-4 py-2" onClick={() => jsonRef.current?.click()}>
+                  <i className="fa-solid fa-upload mr-2"></i>Importa backup
+                </button>
+                <input ref={jsonRef} type="file" accept=".json" className="hidden"
+                  onChange={async (e)=>{
+                    try{
+                      const f = e.target.files?.[0];
+                      if (f) await importJSON(f);
+                    } catch(err){
+                      alert("Errore import JSON: " + (err?.message || err));
+                    } finally {
+                      e.target.value = "";
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="glass rounded-2xl p-4 space-y-3 border-2 border-emerald-500/30">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-clock text-emerald-400"></i>
+                <div className="font-semibold">Backup Automatico Excel</div>
+                <Badge tone="good">Attivo</Badge>
+              </div>
+              <div className="text-sm text-white/70 space-y-2">
+                <p>Il sistema genera automaticamente un backup Excel completo ogni giorno alle <strong className="text-white">18:00</strong>.</p>
+                <p>Il backup include tutti i dati: veicoli, sinistri, manutenzioni, bolli e fornitori.</p>
+                <p className="text-xs text-white/60">
+                  <i className="fa-solid fa-info-circle mr-1"></i>
+                  Il file verrà scaricato automaticamente nella cartella download del browser.
+                </p>
+              </div>
+              <div className="pt-2 border-t border-white/10">
+                <button 
+                  className="rounded-xl px-4 py-2 bg-emerald-500/70 hover:bg-emerald-500/90 border border-emerald-300/30 w-full sm:w-auto"
+                  onClick={() => {
+                    downloadBackupExcel(data);
+                    toast("Backup manuale scaricato!");
+                  }}
+                >
+                  <i className="fa-solid fa-download mr-2"></i>Backup Manuale Adesso
+                </button>
+                <div className="text-xs text-white/55 mt-2">
+                  Ultimo backup automatico: {(() => {
+                    const last = localStorage.getItem(BACKUP_TIME_KEY);
+                    if (!last) return "Mai eseguito";
+                    const date = new Date(last);
+                    return date.toLocaleString('it-IT', { 
+                      day: '2-digit', 
+                      month: '2-digit', 
+                      year: 'numeric', 
+                      hour: '2-digit', 
+                      minute: '2-digit' 
+                    });
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ---------- Views ----------
+    const Dashboard = ({ data, onOpenSummary }) => {
+      const { vehicles, bills } = data;
+      const total = vehicles.length;
+
+      const dueAll = bills
+        .filter(b => !b.paid && b.dueDate)
+        .map(b => ({...b, inDays: daysUntil(b.dueDate)}))
+        .sort((a,b)=> (a.inDays ?? 99999) - (b.inDays ?? 99999));
+
+      const due30 = dueAll.filter(x => x.inDays !== null && x.inDays <= 30);
+      const overdue = dueAll.filter(x => x.inDays !== null && x.inDays < 0);
+
+      const availableToday = vehicles.filter(v => isVehicleAvailableOn(v, todayISO())).length;
+
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="glass rounded-2xl p-4">
+              <div className="text-xs text-white/60">Veicoli</div>
+              <div className="text-3xl font-bold mt-1">{total}</div>
+              <div className="text-sm text-white/70 mt-2">{availableToday} disponibili oggi</div>
+            </div>
+
+            <div className="glass rounded-2xl p-4">
+              <div className="text-xs text-white/60">Scadenze entro 30g</div>
+              <div className="text-3xl font-bold mt-1">{due30.length}</div>
+              <div className="text-sm text-white/70 mt-2">{overdue.length} già scadute</div>
+            </div>
+
+            <div className="glass rounded-2xl p-4">
+              <div className="text-xs text-white/60">Alert</div>
+              <div className="text-sm text-white/70 mt-2">
+                Usa i filtri nelle sezioni oppure apri un riepilogo veicolo dalla targa.
+              </div>
+              <div className="mt-3">
+                <Badge tone="info">Suggerimento</Badge>
+                <span className="text-xs text-white/60 ml-2">Seleziona targa in alto → Riepilogo</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="glass rounded-2xl p-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="font-semibold">Scadenze imminenti</div>
+                <div className="text-xs text-white/60">Ordinato per urgenza (non pagate).</div>
+              </div>
+            </div>
+            <Divider />
+            <div className="space-y-2">
+              {dueAll.slice(0,10).map(b => (
+                <div key={b.id} className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+                  <div>
+                    <button className="text-sm font-semibold underline decoration-white/20 hover:decoration-white/60" onClick={()=>onOpenSummary(b.plate)}>{b.plate}</button>
+                    <div className="text-xs text-white/60">{b.type} · {b.dueDate} · {fmtEUR(b.amount)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {b.inDays < 0 ? <Badge tone="bad">Scaduto</Badge> :
+                     b.inDays <= 7 ? <Badge tone="bad">≤ 7g</Badge> :
+                     b.inDays <= 30 ? <Badge tone="warn">≤ 30g</Badge> :
+                     <Badge tone="info">{b.inDays}g</Badge>}
+                  </div>
+                </div>
+              ))}
+              {dueAll.length === 0 ? <div className="text-sm text-white/70">Nessuna scadenza.</div> : null}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const VehiclesView = ({ data, setData, onOpenSummary, toast }) => {
+      const [q, setQ] = useState("");
+      const [brand, setBrand] = useState("");
+      const [availOn, setAvailOn] = useState(todayISO());
+      const [availMode, setAvailMode] = useState("any"); // any | available | not
+      const [sortKey, setSortKey] = useState("plate"); // plate | brand | km | availabilityEnd
+      const [sortDir, setSortDir] = useState("asc");
+
+      const [editing, setEditing] = useState(null);
+      const [openForm, setOpenForm] = useState(false);
+
+      const brands = useMemo(() => Array.from(new Set(data.vehicles.map(v => (v.brand||"").trim()).filter(Boolean))).sort(), [data.vehicles]);
+
+      const filtered = useMemo(() => {
+        const qq = q.trim().toLowerCase();
+        let rows = data.vehicles.slice();
+
+        if (qq) {
+          rows = rows.filter(v => {
+            const hay = [v.plate, v.brand, v.model, v.category, v.hub, v.group, v.vin, v.notes].join(" ").toLowerCase();
+            return hay.includes(qq);
+          });
+        }
+        if (brand) rows = rows.filter(v => (v.brand||"") === brand);
+
+        if (availMode !== "any") {
+          rows = rows.filter(v => {
+            const ok = isVehicleAvailableOn(v, availOn);
+            return availMode === "available" ? ok : !ok;
+          });
+        }
+
+        const dir = sortDir === "asc" ? 1 : -1;
+        rows.sort((a,b) => {
+          const va = a[sortKey] ?? "";
+          const vb = b[sortKey] ?? "";
+          if (sortKey === "km") return dir * ((va||0) - (vb||0));
+          return dir * String(va).localeCompare(String(vb));
+        });
+
+        return rows;
+      }, [data.vehicles, q, brand, availOn, availMode, sortKey, sortDir]);
+
+      const saveVehicle = (veh) => {
+        // validate duplicate plates
+        const plate = normalizePlate(veh.plate);
+        const dup = data.vehicles.find(v => v.plate === plate && v.id !== veh.id);
+        if (dup) {
+          alert("Targa duplicata: " + plate);
+          return;
+        }
+        setData(prev => {
+          const idx = prev.vehicles.findIndex(v => v.id === veh.id);
+          const next = idx >= 0
+            ? prev.vehicles.map(v => v.id === veh.id ? veh : v)
+            : [...prev.vehicles, veh];
+          return { ...prev, vehicles: next };
+        });
+        toast("Veicolo salvato.");
+        setOpenForm(false);
+        setEditing(null);
+      };
+
+      const delVehicle = (id) => {
+        const v = data.vehicles.find(x => x.id === id);
+        if (!confirm("Eliminare il veicolo " + (v?.plate || "") + "?")) return;
+        setData(prev => ({
+          ...prev,
+          vehicles: prev.vehicles.filter(x => x.id !== id),
+          // keep history but could remove related items: we keep for safety
+        }));
+        toast("Veicolo eliminato.");
+      };
+
+      const cols = [
+        { key:"plate", label:"Targa", render: (v) => (
+          <button className="font-semibold underline decoration-white/20 hover:decoration-white/60" onClick={()=>onOpenSummary(v.plate)}>
+            {v.plate}
+          </button>
+        )},
+        { key:"brand", label:"Brand" },
+        { key:"model", label:"Modello" },
+        { key:"year", label:"Anno" },
+        { key:"hub", label:"Hub" },
+        { key:"group", label:"Gruppo" },
+        { key:"availability", label:"Stato (oggi)", render:(v)=> statusBadge(computeVehicleStatusOn(v, todayISO())) },
+        { key:"km", label:"KM" },
+        { key:"actions", label:"", render:(v)=> (
+          <div className="flex gap-2 justify-end">
+            <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(v); setOpenForm(true);}}>Modifica</button>
+            <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>delVehicle(v.id)}><i className="fa-solid fa-trash"></i></button>
+          </div>
+        )}
+      ];
+
+      return (
+        <div className="space-y-4">
+          <DataBar>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-3">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-car text-white/70"></i>
+                <div className="font-semibold">Veicoli</div>
+                <Badge tone="neutral">{filtered.length}</Badge>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <input className="px-3 py-2 rounded-xl text-sm w-[260px]" placeholder="Cerca (targa, modello, note...)" value={q} onChange={e=>setQ(e.target.value)} />
+                <select className="px-3 py-2 rounded-xl text-sm" value={brand} onChange={e=>setBrand(e.target.value)}>
+                  <option value="">Brand (tutti)</option>
+                  {brands.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+                <select className="px-3 py-2 rounded-xl text-sm" value={availMode} onChange={e=>setAvailMode(e.target.value)}>
+                  <option value="any">Disponibilità: tutte</option>
+                  <option value="available">Disponibili</option>
+                  <option value="not">Non disponibili</option>
+                </select>
+                <input type="date" className="px-3 py-2 rounded-xl text-sm" value={availOn} onChange={e=>setAvailOn(e.target.value)} title="Valuta disponibilità a data" />
+                <select className="px-3 py-2 rounded-xl text-sm" value={sortKey} onChange={e=>setSortKey(e.target.value)}>
+                  <option value="plate">Ordina: targa</option>
+                  <option value="brand">Ordina: brand</option>
+                  <option value="km">Ordina: km</option>
+                  <option value="availabilityEnd">Ordina: fine disp.</option>
+                </select>
+                <button className="btn rounded-xl px-3 py-2 text-sm" onClick={()=>setSortDir(d=>d==="asc"?"desc":"asc")}>
+                  {sortDir === "asc" ? "↑" : "↓"}
+                </button>
+              </div>
+            </div>
+
+            <button className="rounded-xl px-4 py-2 bg-purple-500/70 hover:bg-purple-500/90 border border-purple-300/30"
+              onClick={()=>{setEditing(null); setOpenForm(true);}}>
+              <i className="fa-solid fa-plus mr-2"></i>Nuovo
+            </button>
+          </DataBar>
+
+          <Table columns={cols} rows={filtered} rowKey={(r)=>r.id} emptyText="Nessun veicolo." />
+
+          <Modal open={openForm} title={editing ? "Modifica veicolo" : "Nuovo veicolo"} onClose={()=>{setOpenForm(false); setEditing(null);}}>
+            <VehicleForm initial={editing} onSave={saveVehicle} onCancel={()=>{setOpenForm(false); setEditing(null);}} />
+          </Modal>
+        </div>
+      );
+    };
+
+    const GenericListView = ({ kind, data, setData, toast, onOpenSummary }) => {
+      const titleMap = {
+        accident: { icon:"fa-triangle-exclamation", title:"Sinistri" },
+        maintenance: { icon:"fa-screwdriver-wrench", title:"Manutenzioni" },
+        bill: { icon:"fa-file-invoice-dollar", title:"Bolli / Scadenze" }
+      }[kind];
+
+      const [q, setQ] = useState("");
+      const [plate, setPlate] = useState("");
+      const [dateFrom, setDateFrom] = useState("");
+      const [dateTo, setDateTo] = useState("");
+      const [onlyDueSoon, setOnlyDueSoon] = useState(false); // bills
+      const [days, setDays] = useState(30);
+
+      const [editing, setEditing] = useState(null);
+      const [openForm, setOpenForm] = useState(false);
+
+      const items = kind === "accident" ? data.accidents : kind === "maintenance" ? data.maintenances : data.bills;
+
+      const plates = useMemo(() => data.vehicles.map(v=>v.plate).sort(), [data.vehicles]);
+
+      const filtered = useMemo(() => {
+        const qq = q.trim().toLowerCase();
+        let rows = items.slice();
+
+        if (plate) rows = rows.filter(x => x.plate === plate);
+        if (qq) {
+          rows = rows.filter(x => JSON.stringify(x).toLowerCase().includes(qq));
+        }
+
+        if (kind === "bill") {
+          if (onlyDueSoon) {
+            rows = rows.filter(b => !b.paid && daysUntil(b.dueDate) !== null && daysUntil(b.dueDate) <= Number(days || 30));
+          }
+          rows.sort((a,b)=> (a.dueDate||"").localeCompare(b.dueDate||""));
+        } else {
+          if (dateFrom) rows = rows.filter(x => (x.date||"") >= dateFrom);
+          if (dateTo) rows = rows.filter(x => (x.date||"") <= dateTo);
+          rows.sort((a,b)=> (b.date||"").localeCompare(a.date||""));
+        }
+        return rows;
+      }, [items, q, plate, dateFrom, dateTo, onlyDueSoon, days, kind]);
+
+      const saveItem = (payload) => {
+        setData(prev => {
+          const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
+          const arr = prev[key];
+          const idx = arr.findIndex(x => x.id === payload.id);
+          const next = idx >= 0 ? arr.map(x => x.id === payload.id ? payload : x) : [...arr, payload];
+          return { ...prev, [key]: next };
+        });
+        toast("Salvato.");
+        setOpenForm(false);
+        setEditing(null);
+      };
+
+      const delItem = (id) => {
+        if (!confirm("Eliminare questa voce?")) return;
+        setData(prev => {
+          const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
+          return { ...prev, [key]: prev[key].filter(x => x.id !== id) };
+        });
+        toast("Eliminato.");
+      };
+
+      const supplierById = useMemo(() => Object.fromEntries(data.suppliers.map(s=>[s.id,s])), [data.suppliers]);
+
+      const cols = kind === "bill"
+        ? [
+            { key:"plate", label:"Targa", render:(b)=> <button className="font-semibold underline decoration-white/20 hover:decoration-white/60" onClick={()=>onOpenSummary(b.plate)}>{b.plate}</button> },
+            { key:"type", label:"Tipo" },
+            { key:"dueDate", label:"Scadenza" },
+            { key:"amount", label:"Importo", render:(b)=> fmtEUR(b.amount) },
+            { key:"paid", label:"Stato", render:(b)=> b.paid ? <Badge tone="good">Pagato</Badge> : (daysUntil(b.dueDate)<0 ? <Badge tone="bad">Scaduto</Badge> : <Badge tone="warn">Da pagare</Badge>) },
+            { key:"supplierId", label:"Fornitore", render:(b)=> supplierById[b.supplierId]?.name || "" },
+            { key:"actions", label:"", render:(b)=> (
+              <div className="flex gap-2 justify-end">
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(b); setOpenForm(true);}}>Modifica</button>
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>delItem(b.id)}><i className="fa-solid fa-trash"></i></button>
+              </div>
+            )}
+          ]
+        : kind === "accident"
+        ? [
+            { key:"plate", label:"Targa", render:(a)=> <button className="font-semibold underline decoration-white/20 hover:decoration-white/60" onClick={()=>onOpenSummary(a.plate)}>{a.plate}</button> },
+            { key:"date", label:"Data" },
+            { key:"period", label:"Periodo", render:(a)=> (a.startDate || a.endDate) ? `${a.startDate || '—'} → ${a.endDate || '—'}` : '—' },
+            { key:"status", label:"Stato", render:(a)=> (a.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>) },
+            { key:"description", label:"Descrizione", render:(a)=> (
+              <div className="max-w-xs truncate" title={a.notes || a.description}>{a.notes || a.description || '—'}</div>
+            )},
+            { key:"cost", label:"Costo", render:(a)=> fmtEUR(a.cost) },
+            { key:"reimbursement", label:"Rimborso", render:(a)=> fmtEUR(a.insuranceReimbursement) },
+            { key:"attachments", label:"PDF", render:(a)=> {
+              const atts = (a.attachments && a.attachments.length) ? a.attachments
+                : (a.attachmentName && a.attachmentData ? [{ id:"legacy", name:a.attachmentName, data:a.attachmentData }] : []);
+              return atts.length ? (
+                <div className="flex flex-wrap gap-1">
+                  {atts.map(att => (
+                    <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                      <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
+                    </button>
+                  ))}
+                </div>
+              ) : '—';
+            } },
+            { key:"actions", label:"", render:(a)=> (
+              <div className="flex gap-2 justify-end">
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(a); setOpenForm(true);}}>Modifica</button>
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>delItem(a.id)}><i className="fa-solid fa-trash"></i></button>
+              </div>
+            )}
+          ]
+        : [
+            { key:"plate", label:"Targa", render:(m)=> <button className="font-semibold underline decoration-white/20 hover:decoration-white/60" onClick={()=>onOpenSummary(m.plate)}>{m.plate}</button> },
+            { key:"date", label:"Data" },
+            { key:"period", label:"Periodo", render:(m)=> (m.startDate || m.endDate) ? `${m.startDate || '—'} → ${m.endDate || '—'}` : '—' },
+            { key:"status", label:"Stato", render:(m)=> (m.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>) },
+            { key:"type", label:"Tipo" },
+            { key:"km", label:"KM" },
+            { key:"cost", label:"Costo", render:(m)=> fmtEUR(m.cost) },
+            { key:"reimbursement", label:"Rimborso", render:(m)=> fmtEUR(m.insuranceReimbursement) },
+            { key:"attachments", label:"PDF", render:(m)=> {
+              const atts = (m.attachments && m.attachments.length) ? m.attachments
+                : (m.attachmentName && m.attachmentData ? [{ id:"legacy", name:m.attachmentName, data:m.attachmentData }] : []);
+              return atts.length ? (
+                <div className="flex flex-wrap gap-1">
+                  {atts.map(att => (
+                    <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                      <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
+                    </button>
+                  ))}
+                </div>
+              ) : '—';
+            } },
+            { key:"actions", label:"", render:(m)=> (
+              <div className="flex gap-2 justify-end">
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(m); setOpenForm(true);}}>Modifica</button>
+                <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>delItem(m.id)}><i className="fa-solid fa-trash"></i></button>
+              </div>
+            )}
+          ];
+
+      return (
+        <div className="space-y-4">
+          <DataBar>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-3">
+              <div className="flex items-center gap-2">
+                <i className={"fa-solid " + titleMap.icon + " text-white/70"}></i>
+                <div className="font-semibold">{titleMap.title}</div>
+                <Badge tone="neutral">{filtered.length}</Badge>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <select className="px-3 py-2 rounded-xl text-sm" value={plate} onChange={e=>setPlate(e.target.value)}>
+                  <option value="">Targa (tutte)</option>
+                  {plates.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <input className="px-3 py-2 rounded-xl text-sm w-[260px]" placeholder="Cerca" value={q} onChange={e=>setQ(e.target.value)} />
+
+                {kind === "bill" ? (
+                  <>
+                    <label className="inline-flex items-center gap-2 text-sm text-white/80 ml-1">
+                      <input type="checkbox" checked={onlyDueSoon} onChange={e=>setOnlyDueSoon(e.target.checked)} />
+                      Solo entro
+                    </label>
+                    <input className="px-3 py-2 rounded-xl text-sm w-[90px]" value={days} onChange={e=>setDays(e.target.value)} />
+                    <div className="text-sm text-white/70 self-center">giorni</div>
+                  </>
+                ) : (
+                  <>
+                    <input type="date" className="px-3 py-2 rounded-xl text-sm" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+                    <input type="date" className="px-3 py-2 rounded-xl text-sm" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+                  </>
+                )}
+              </div>
+            </div>
+
+            <button className="rounded-xl px-4 py-2 bg-purple-500/70 hover:bg-purple-500/90 border border-purple-300/30"
+              onClick={()=>{setEditing(null); setOpenForm(true);}}>
+              <i className="fa-solid fa-plus mr-2"></i>Nuovo
+            </button>
+          </DataBar>
+
+          <Table columns={cols} rows={filtered} rowKey={(r)=>r.id} emptyText="Nessun dato." />
+
+          <Modal open={openForm} title={(editing ? "Modifica" : "Nuovo") + " — " + titleMap.title} onClose={()=>{setOpenForm(false); setEditing(null);}}>
+            <GenericItemForm kind={kind} vehicles={data.vehicles} suppliers={data.suppliers} initial={editing} onSave={saveItem} onCancel={()=>{setOpenForm(false); setEditing(null);}} />
+          </Modal>
+        </div>
+      );
+    };
+
+    const SuppliersView = ({ data, setData, toast }) => {
+      const [q, setQ] = useState("");
+      const [openForm, setOpenForm] = useState(false);
+      const [editing, setEditing] = useState(null);
+
+      const filtered = useMemo(() => {
+        const qq = q.trim().toLowerCase();
+        let rows = data.suppliers.slice();
+        if (qq) rows = rows.filter(s => JSON.stringify(s).toLowerCase().includes(qq));
+        rows.sort((a,b)=> (a.name||"").localeCompare(b.name||""));
+        return rows;
+      }, [data.suppliers, q]);
+
+      const save = (s) => {
+        setData(prev => {
+          const idx = prev.suppliers.findIndex(x => x.id === s.id);
+          const next = idx >= 0 ? prev.suppliers.map(x => x.id === s.id ? s : x) : [...prev.suppliers, s];
+          return { ...prev, suppliers: next };
+        });
+        toast("Fornitore salvato.");
+        setOpenForm(false);
+        setEditing(null);
+      };
+
+      const del = (id) => {
+        const s = data.suppliers.find(x => x.id === id);
+        if (!confirm("Eliminare fornitore " + (s?.name || "") + "?")) return;
+        setData(prev => ({...prev, suppliers: prev.suppliers.filter(x => x.id !== id)}));
+        toast("Fornitore eliminato.");
+      };
+
+      const cols = [
+        { key:"name", label:"Nome" },
+        { key:"type", label:"Tipo" },
+        { key:"phone", label:"Telefono" },
+        { key:"email", label:"Email" },
+        { key:"actions", label:"", render:(s)=> (
+          <div className="flex gap-2 justify-end">
+            <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(s); setOpenForm(true);}}>Modifica</button>
+            <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>del(s.id)}><i className="fa-solid fa-trash"></i></button>
+          </div>
+        )}
+      ];
+
+      return (
+        <div className="space-y-4">
+          <DataBar>
+            <div className="flex items-center gap-2">
+              <i className="fa-solid fa-building text-white/70"></i>
+              <div className="font-semibold">Fornitori</div>
+              <Badge tone="neutral">{filtered.length}</Badge>
+              <input className="ml-3 px-3 py-2 rounded-xl text-sm w-[260px]" placeholder="Cerca" value={q} onChange={e=>setQ(e.target.value)} />
+            </div>
+            <button className="rounded-xl px-4 py-2 bg-emerald-500/70 hover:bg-emerald-500/90 border border-emerald-300/30"
+              onClick={()=>{setEditing(null); setOpenForm(true);}}>
+              <i className="fa-solid fa-plus mr-2"></i>Nuovo
+            </button>
+          </DataBar>
+
+          <Table columns={cols} rows={filtered} rowKey={(r)=>r.id} emptyText="Nessun fornitore." />
+
+          <Modal open={openForm} title={editing ? "Modifica fornitore" : "Nuovo fornitore"} onClose={()=>{setOpenForm(false); setEditing(null);}}>
+            <SupplierForm initial={editing} onSave={save} onCancel={()=>{setOpenForm(false); setEditing(null);}} />
+          </Modal>
+        </div>
+      );
+    };
+
+    // ---------- App ----------
+    const FleetManagerApp = () => {
+      const [data, setData] = useState(() => loadStore() || defaultData);
+      const [view, setView] = useState(() => (loadStore()?.ui?.lastView) || "dashboard");
+
+      const [toastMsg, setToastMsg] = useState("");
+      const toastTimer = useRef(null);
+      const toast = (msg) => {
+        setToastMsg(msg);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(()=>setToastMsg(""), 2200);
+      };
+
+      const [selectedPlate, setSelectedPlate] = useState("");
+      const [summaryPlate, setSummaryPlate] = useState("");
+
+      // Avvia il timer per il backup automatico giornaliero
+      useEffect(() => {
+        startBackupTimer(data);
+      }, []);
+
+      useEffect(() => {
+        saveStore({ ...data, ui: { ...(data.ui||{}), lastView: view }});
+      }, [data, view]);
+
+      // keep selected plate valid
+      useEffect(() => {
+        if (selectedPlate && !data.vehicles.some(v => v.plate === selectedPlate)) setSelectedPlate("");
+      }, [data.vehicles, selectedPlate]);
+
+      const onOpenSummary = (plate) => {
+        const p = normalizePlate(plate);
+        if (!p) return;
+        setSelectedPlate(p);
+        setSummaryPlate(p);
+      };
+
+      // Funzione per backup manuale
+      const handleManualBackup = () => {
+        downloadBackupExcel(data);
+        toast("Backup Excel scaricato!");
+      };
+
+      const nav = [
+        { id:"dashboard", label:"Dashboard", icon:"fa-chart-line" },
+        { id:"vehicles", label:"Veicoli", icon:"fa-car" },
+        { id:"accidents", label:"Sinistri", icon:"fa-triangle-exclamation" },
+        { id:"maintenances", label:"Manutenzioni", icon:"fa-screwdriver-wrench" },
+        { id:"bills", label:"Bolli / Scadenze", icon:"fa-file-invoice-dollar" },
+        { id:"suppliers", label:"Fornitori", icon:"fa-building" },
+        { id:"data", label:"Dati", icon:"fa-database" },
+      ];
+
+      const View = () => {
+        if (view === "dashboard") return <Dashboard data={data} onOpenSummary={onOpenSummary} />;
+        if (view === "vehicles") return <VehiclesView data={data} setData={setData} onOpenSummary={onOpenSummary} toast={toast} />;
+        if (view === "accidents") return <GenericListView kind="accident" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
+        if (view === "maintenances") return <GenericListView kind="maintenance" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
+        if (view === "bills") return <GenericListView kind="bill" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
+        if (view === "suppliers") return <SuppliersView data={data} setData={setData} toast={toast} />;
+        return <ExportImportPanel data={data} setData={setData} toast={toast} />;
+      };
+
+      return (
+        <div className="min-h-screen flex">
+          {/* Sidebar */}
+          <aside className="w-72 hidden lg:flex flex-col glass m-4 rounded-3xl overflow-hidden">
+            <div className="p-5 border-b border-white/10">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-2xl bg-purple-500/30 border border-purple-300/30 flex items-center justify-center">
+                  <i className="fa-solid fa-car-side"></i>
+                </div>
+                <div>
+                  <div className="font-bold text-lg">Fleet Manager</div>
+                  <div className="text-xs text-white/55">Pro v3.6 — Backup automatico Excel giornaliero</div>
+                </div>
+              </div>
+            </div>
+
+            <nav className="p-3 space-y-1">
+              {nav.map(n => (
+                <button
+                  key={n.id}
+                  onClick={()=>setView(n.id)}
+                  className={"w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm " +
+                    (view === n.id ? "bg-white/10 border border-white/15" : "hover:bg-white/5")}
+                >
+                  <i className={"fa-solid " + n.icon + " text-white/70"}></i>
+                  <span className="font-semibold">{n.label}</span>
+                </button>
+              ))}
+            </nav>
+
+            <div className="mt-auto p-4 border-t border-white/10 text-xs text-white/55">
+              Dati salvati nel browser (localStorage).
+            </div>
+          </aside>
+
+          {/* Main */}
+          <main className="flex-1 p-4 lg:pl-0">
+            <div className="rounded-3xl p-4 md:p-6">
+              {/* Top bar */}
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="lg:hidden">
+                    <select className="px-3 py-2 rounded-xl text-sm" value={view} onChange={e=>setView(e.target.value)}>
+                      {nav.map(n => <option key={n.id} value={n.id}>{n.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="hidden lg:block text-sm text-white/60">Selezione rapida veicolo:</div>
+                </div>
+
+                <VehicleQuickPicker
+                  vehicles={data.vehicles}
+                  selectedPlate={selectedPlate}
+                  setSelectedPlate={setSelectedPlate}
+                  onOpenSummary={onOpenSummary}
+                />
+              </div>
+
+              <Divider />
+
+              <View />
+            </div>
+          </main>
+
+          {/* Summary modal */}
+          <VehicleSummary plate={summaryPlate} data={data} onClose={()=>setSummaryPlate("")} />
+
+          {/* Toast */}
+          {toastMsg ? (
+            <div className="fixed bottom-5 right-5 z-50 glass rounded-2xl px-4 py-3 shadow-xl">
+              <div className="text-sm">{toastMsg}</div>
+            </div>
+          ) : null}
+        </div>
+      );
+    };
+
+    ReactDOM.render(<FleetManagerApp />, document.getElementById("root"));
+  </script>
+</body>
+</html>
