@@ -2299,11 +2299,53 @@ const excelSerialToISO = (v) => {
         </div>
       );
     };
+const LoginScreen = ({ onLogin, errorMsg }) => {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="glass rounded-3xl p-6 w-full max-w-md space-y-4">
+        <div className="text-xl font-bold">Fleet Manager</div>
+        <div className="text-sm text-white/70">Accedi per vedere i dati condivisi.</div>
+
+        <div className="space-y-2">
+          <div className="text-xs text-white/70">Email</div>
+          <input className="w-full px-3 py-2 rounded-xl" value={email} onChange={e=>setEmail(e.target.value)} />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-xs text-white/70">Password</div>
+          <input type="password" className="w-full px-3 py-2 rounded-xl" value={password} onChange={e=>setPassword(e.target.value)} />
+        </div>
+
+        {errorMsg ? <div className="text-sm text-rose-200">{errorMsg}</div> : null}
+
+        <button
+          className="w-full rounded-xl px-4 py-2 bg-purple-500/70 hover:bg-purple-500/90 border border-purple-300/30"
+          onClick={() => onLogin(email, password)}
+        >
+          Accedi
+        </button>
+
+        <div className="text-xs text-white/55">
+          Se non hai le credenziali, vanno create in Supabase → Authentication → Users.
+        </div>
+      </div>
+    </div>
+  );
+};
 
     // ---------- App ----------
     const FleetManagerApp = () => {
-      const [data, setData] = useState(() => loadStore() || defaultData);
-      const [view, setView] = useState(() => (loadStore()?.ui?.lastView) || "dashboard");
+      const [data, setData] = useState(defaultData);
+      const [view, setView] = useState("dashboard");
+
+      const [session, setSession] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [loginErr, setLoginErr] = useState("");
+
+
 
       const [toastMsg, setToastMsg] = useState("");
       const toastTimer = useRef(null);
@@ -2315,6 +2357,51 @@ const excelSerialToISO = (v) => {
 
       const [selectedPlate, setSelectedPlate] = useState("");
       const [summaryPlate, setSummaryPlate] = useState("");
+
+      useEffect(() => {
+  (async () => {
+    try {
+      const s = await getSession();
+      setSession(s);
+    } finally {
+      setLoading(false);
+    }
+  })();
+
+  const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    setSession(session || null);
+  });
+
+  return () => sub.subscription.unsubscribe();
+}, []);
+
+useEffect(() => {
+  if (!session) return;
+  (async () => {
+    try {
+      setLoading(true);
+      const dbData = await fetchAllFromDB();
+      setData(dbData);
+    } catch (e) {
+      alert("Errore caricamento dati: " + (e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  })();
+}, [session]);
+      
+const handleLogin = async (email, password) => {
+  try {
+    setLoginErr("");
+    setLoading(true);
+    await signIn(email, password);
+  } catch (e) {
+    setLoginErr(e?.message || "Login non riuscito");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
       // Avvia il timer per il backup automatico giornaliero
       useEffect(() => {
@@ -2362,6 +2449,15 @@ const excelSerialToISO = (v) => {
         if (view === "suppliers") return <SuppliersView data={data} setData={setData} toast={toast} />;
         return <ExportImportPanel data={data} setData={setData} toast={toast} />;
       };
+
+      if (loading) {
+        return <div className="min-h-screen flex items-center justify-center text-white/70">Caricamento...</div>;
+      }
+      
+      if (!session) {
+        return <LoginScreen onLogin={handleLogin} errorMsg={loginErr} />;
+      }
+
 
       return (
         <div className="min-h-screen flex">
