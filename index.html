@@ -53,6 +53,10 @@
       SUPABASE_URL,
       SUPABASE_ANON_KEY
     );
+
+    // DB schema detection (handles different column names across Supabase tables)
+    const DB_SCHEMA = { vehicles: {}, suppliers: {}, accidents: {}, maintenances: {}, bills: {} };
+
     async function pushAllToDB(appData) {
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
@@ -209,7 +213,9 @@ async function upsertTable(table, rows) {
       date: a.date || null,
       start_date: a.startDate || a.start_date || null,
       end_date: a.endDate || a.end_date || null,
-      status: a.status || "aperto",
+      ...(DB_SCHEMA.accidents.has_status ? { status: (a.status || "aperto") } : {}),
+      ...(DB_SCHEMA.accidents.has_is_closed ? { is_closed: (a.status === "chiuso") } : {}),
+      ...(DB_SCHEMA.accidents.has_closed ? { closed: (a.status === "chiuso") } : {}),
       description: a.description || "",
       location: a.location || "",
       cost: a.cost ?? null,
@@ -230,7 +236,9 @@ async function upsertTable(table, rows) {
       date: m.date || null,
       start_date: m.startDate || m.start_date || null,
       end_date: m.endDate || m.end_date || null,
-      status: m.status || "aperto",
+      ...(DB_SCHEMA.maintenances.has_status ? { status: (m.status || "aperto") } : {}),
+      ...(DB_SCHEMA.maintenances.has_is_closed ? { is_closed: (m.status === "chiuso") } : {}),
+      ...(DB_SCHEMA.maintenances.has_closed ? { closed: (m.status === "chiuso") } : {}),
       type: m.type || "",
       km: m.km ?? null,
       cost: m.cost ?? null,
@@ -322,6 +330,17 @@ async function fetchAllFromDB() {
     if (r.error) throw r.error;
   }
 
+  // Detect column variants (snake_case vs alternative schemas)
+  const keysOf = (arr) => (arr && arr.length ? Object.keys(arr[0] || {}) : []);
+  const vKeys = keysOf(vehicles.data || []);
+  const aKeys = keysOf(accidents.data || []);
+  const mKeys = keysOf(maintenances.data || []);
+  const bKeys = keysOf(bills.data || []);
+  DB_SCHEMA.vehicles = { has_plate: vKeys.includes("plate"), has_id: vKeys.includes("id"), has_av_start: vKeys.includes("availability_start"), has_av_end: vKeys.includes("availability_end") };
+  DB_SCHEMA.accidents = { has_status: aKeys.includes("status"), has_is_closed: aKeys.includes("is_closed"), has_closed: aKeys.includes("closed") };
+  DB_SCHEMA.maintenances = { has_status: mKeys.includes("status"), has_is_closed: mKeys.includes("is_closed"), has_closed: mKeys.includes("closed") };
+  DB_SCHEMA.bills = { has_due_date: bKeys.includes("due_date") };
+
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
   const toISO = (v) => {
     if (v === null || v === undefined || v === "") return "";
@@ -360,6 +379,12 @@ async function fetchAllFromDB() {
     plate: String(a.plate || "").trim().toUpperCase(),
     startDate: toISO(a.startDate ?? a.start_date),
     endDate: toISO(a.endDate ?? a.end_date),
+    // Normalize status across schemas:
+    // - if DB has boolean is_closed/closed -> map to 'aperto'/'chiuso'
+    // - else keep string status
+    status: (DB_SCHEMA.accidents.has_is_closed || DB_SCHEMA.accidents.has_closed)
+      ? ((a.is_closed ?? a.closed) ? "chiuso" : "aperto")
+      : (a.status || "aperto"),
     insuranceReimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
     supplierId: a.supplierId ?? a.supplier_id ?? "",
     attachmentName: a.attachmentName ?? a.attachment_name ?? "",
@@ -371,6 +396,9 @@ async function fetchAllFromDB() {
     plate: String(m.plate || "").trim().toUpperCase(),
     startDate: toISO(m.startDate ?? m.start_date),
     endDate: toISO(m.endDate ?? m.end_date),
+    status: (DB_SCHEMA.maintenances.has_is_closed || DB_SCHEMA.maintenances.has_closed)
+      ? ((m.is_closed ?? m.closed) ? "chiuso" : "aperto")
+      : (m.status || "aperto"),
     insuranceReimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
     supplierId: m.supplierId ?? m.supplier_id ?? "",
     attachmentName: m.attachmentName ?? m.attachment_name ?? "",
