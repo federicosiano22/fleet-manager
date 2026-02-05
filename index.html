@@ -54,8 +54,13 @@
       SUPABASE_ANON_KEY
     );
 
-    // DB schema detection (handles different column names across Supabase tables)
-    const DB_SCHEMA = { vehicles: {}, suppliers: {}, accidents: {}, maintenances: {}, bills: {} };
+    // --- DB schema cache (from fetched rows) ---
+    const schemaCols = {}; // table -> Set(columns)
+    const setSchemaFromRows = (table, rows) => {
+      if (!rows || !rows.length) return;
+      schemaCols[table] = new Set(Object.keys(rows[0] || {}));
+    };
+    const hasCol = (table, col) => !!(schemaCols[table] && schemaCols[table].has(col));
 
     async function pushAllToDB(appData) {
   // 1) VEHICLES: mapping + upsert su plate
@@ -168,138 +173,165 @@
     bills: r5.data?.length || 0,
   };
 }
-async function upsertTable(table, rows) {
-  // Robust upsert: map App shape -> DB columns (snake_case) and drop UI-only fields.
-  if (!rows || !rows.length) return;
-
-  const ensureId = (x) => ({ ...x, id: x.id || (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + "-" + Date.now().toString(36))) });
-
-  const mapVehicle = (v) => ({
-    id: v.id || undefined,
-    plate: String(v.plate || "").trim().toUpperCase(),
-    brand: v.brand || "",
-    model: v.model || "",
-    year: v.year || "",
-    category: v.category || "",
-    hub: v.hub || "",
-    group: v.group || "",
-    vin: v.vin || "",
-    km: v.km ?? null,
-    availability_start: v.availabilityStart || v.availability_start || null,
-    availability_end: v.availabilityEnd || v.availability_end || null,
-    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
-    notes: v.notes || "",
-    updated_at: new Date().toISOString(),
-  });
-
-  const mapSupplier = (s0) => {
-    const s = ensureId(s0);
-    return {
-      id: s.id,
-      name: s.name || "",
-      type: s.type || "",
-      phone: s.phone || "",
-      email: s.email || "",
-      notes: s.notes || "",
-      updated_at: new Date().toISOString(),
-    };
+async function toDbRow(table, row) {
+  // Normalize app row -> DB row (snake_case, remove UI-only fields)
+  const r = row || {};
+  const pick = (obj, keys) => {
+    const out = {};
+    for (const k of keys) if (obj[k] !== undefined) out[k] = obj[k];
+    return out;
+  };
+  const iso = (v) => {
+    if (v === null || v === undefined || v === "") return null;
+    // keep YYYY-MM-DD as-is
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    // accept dd/mm/yyyy from UI
+    if (typeof v === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(v)) {
+      const [dd, mm, yyyy] = v.split("/");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    // fallback: Date parse
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return v;
+    return d.toISOString().slice(0, 10);
   };
 
-  const mapAccident = (a0) => {
-    const a = ensureId(a0);
-    return {
-      id: a.id,
-      plate: String(a.plate || "").trim().toUpperCase(),
-      date: a.date || null,
-      start_date: a.startDate || a.start_date || null,
-      end_date: a.endDate || a.end_date || null,
-      ...(DB_SCHEMA.accidents.has_status ? { status: (a.status || "aperto") } : {}),
-      ...(DB_SCHEMA.accidents.has_is_closed ? { is_closed: (a.status === "chiuso") } : {}),
-      ...(DB_SCHEMA.accidents.has_closed ? { closed: (a.status === "chiuso") } : {}),
-      description: a.description || "",
-      location: a.location || "",
-      cost: a.cost ?? null,
-      insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
-      notes: a.notes || "",
-      supplier_id: a.supplierId || a.supplier_id || null,
-      attachment_name: a.attachmentName || a.attachment_name || null,
-      attachment_data: a.attachmentData || a.attachment_data || null,
-      updated_at: new Date().toISOString(),
+  if (table === "vehicles") {
+    // Convert known camelCase keys to DB snake_case
+    const out = {
+      ...pick(r, ["id","plate","targa","brand","model","year","category","hub","vin","km","group","notes","status"]),
+      availability_start: iso(r.availabilityStart ?? r.availability_start),
+      availability_end: iso(r.availabilityEnd ?? r.availability_end),
     };
-  };
+    // prefer 'plate' over 'targa' if both
+    if (!out.plate && out.targa) { out.plate = out.targa; delete out.targa; }
+    return out;
+  }
 
-  const mapMaintenance = (m0) => {
-    const m = ensureId(m0);
-    return {
-      id: m.id,
-      plate: String(m.plate || "").trim().toUpperCase(),
-      date: m.date || null,
-      start_date: m.startDate || m.start_date || null,
-      end_date: m.endDate || m.end_date || null,
-      ...(DB_SCHEMA.maintenances.has_status ? { status: (m.status || "aperto") } : {}),
-      ...(DB_SCHEMA.maintenances.has_is_closed ? { is_closed: (m.status === "chiuso") } : {}),
-      ...(DB_SCHEMA.maintenances.has_closed ? { closed: (m.status === "chiuso") } : {}),
-      type: m.type || "",
-      km: m.km ?? null,
-      cost: m.cost ?? null,
-      insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
-      notes: m.notes || "",
-      supplier_id: m.supplierId || m.supplier_id || null,
-      attachment_name: m.attachmentName || m.attachment_name || null,
-      attachment_data: m.attachmentData || m.attachment_data || null,
-      updated_at: new Date().toISOString(),
+  if (table === "accidents") {
+    const out = {
+      ...pick(r, ["id","plate","description","cost","status","notes"]),
+      date: iso(r.date),
+      start_date: iso(r.startDate ?? r.start_date),
+      end_date: iso(r.endDate ?? r.end_date),
+      insurance_reimbursement: r.insuranceReimbursement ?? r.insurance_reimbursement,
     };
-  };
 
-  const mapBill = (b0) => {
-    const b = ensureId(b0);
-    return {
-      id: b.id,
-      plate: String(b.plate || "").trim().toUpperCase(),
-      type: b.type || "",
-      due_date: b.dueDate || b.due_date || null,
-      amount: b.amount ?? null,
-      paid: !!b.paid,
-      supplier_id: b.supplierId || b.supplier_id || null,
-      notes: b.notes || "",
-      updated_at: new Date().toISOString(),
+    // Map status (Aperto/Chiuso) to DB boolean columns if present
+    const s = String(out.status ?? "").toLowerCase();
+    const isClosed = (s === "chiuso" || s === "closed" || s === "1" || s === "true");
+    const isOpen = (s === "aperto" || s === "open" || s === "0" || s === "false");
+    if (hasCol(table, "is_closed")) { out.is_closed = isClosed; delete out.status; }
+    else if (hasCol(table, "closed")) { out.closed = isClosed; delete out.status; }
+    else if (hasCol(table, "is_open")) { out.is_open = isOpen; delete out.status; }
+    else if (hasCol(table, "open")) { out.open = isOpen; delete out.status; }
+
+    return out;
+  }
+
+  if (table === "maintenances") {
+    const out = {
+      ...pick(r, ["id","plate","type","km","cost","status","notes"]),
+      date: iso(r.date),
+      start_date: iso(r.startDate ?? r.start_date),
+      end_date: iso(r.endDate ?? r.end_date),
+      insurance_reimbursement: r.insuranceReimbursement ?? r.insurance_reimbursement,
     };
-  };
 
-  // Map
-  let payload = [];
-  if (table === "vehicles") payload = rows.filter(v => (v?.plate || "").trim() !== "").map(mapVehicle);
-  else if (table === "suppliers") payload = rows.map(mapSupplier);
-  else if (table === "accidents") payload = rows.map(mapAccident);
-  else if (table === "maintenances") payload = rows.map(mapMaintenance);
-  else if (table === "bills") payload = rows.map(mapBill);
-  else payload = rows;
+    // Map status (Aperto/Chiuso) to DB boolean columns if present
+    const s = String(out.status ?? "").toLowerCase();
+    const isClosed = (s === "chiuso" || s === "closed" || s === "1" || s === "true");
+    const isOpen = (s === "aperto" || s === "open" || s === "0" || s === "false");
+    if (hasCol(table, "is_closed")) { out.is_closed = isClosed; delete out.status; }
+    else if (hasCol(table, "closed")) { out.closed = isClosed; delete out.status; }
+    else if (hasCol(table, "is_open")) { out.is_open = isOpen; delete out.status; }
+    else if (hasCol(table, "open")) { out.open = isOpen; delete out.status; }
 
-  if (!payload.length) return;
+    return out;
+  }
 
-  // Upsert with appropriate conflict key
-  let q = supabase.from(table);
-  if (table === "vehicles") q = q.upsert(payload, { onConflict: "plate" });
-  else q = q.upsert(payload, { onConflict: "id" });
+  if (table === "bills") {
+    const out = {
+      ...pick(r, ["id","plate","type","notes","status","amount"]),
+      due_date: iso(r.dueDate ?? r.due_date),
+      paid_date: iso(r.paidDate ?? r.paid_date),
+      cost: r.cost,
+    };
+    return out;
+  }
 
-  const { error } = await q;
-  if (error) throw error;
+  if (table === "suppliers") {
+    const out = { ...r };
+    // remove obvious UI-only fields if present
+    delete out.__ui;
+    return out;
+  }
+
+  // default: strip common UI-only fields
+  const out = { ...r };
+  delete out.attachments;
+  delete out.timeline;
+  delete out.periods;
+  return out;
 }
 
-async function deleteRowFromDB(table, row) {
-  // Delete by id (most tables) or by plate for vehicles
-  if (!row) return;
-  if (table === "vehicles") {
-    const plate = String(row.plate || "").trim().toUpperCase();
-    if (!plate) return;
-    const { error } = await supabase.from("vehicles").delete().eq("plate", plate);
-    if (error) throw error;
-    return;
+function stripUnknownColumnFromRows(rows, col) {
+  if (!col) return rows;
+  return rows.map(r => {
+    if (!r || typeof r !== "object") return r;
+    const x = { ...r };
+    delete x[col];
+    return x;
+  });
+}
+
+function extractMissingColumnName(error) {
+  const msg = (error && (error.message || error.details || error.hint)) ? (error.message || error.details || error.hint) : "";
+  // Examples:
+  // 'column "attachments" of relation "accidents" does not exist'
+  // 'Could not find the 'attachments' column of 'accidents' in the schema cache'
+  let m = msg.match(/column\s+"([^"]+)"/i);
+  if (m && m[1]) return m[1];
+  m = msg.match(/'([^']+)'\s+column/i);
+  if (m && m[1]) return m[1];
+  m = msg.match(/\'([^\']+)\'\s+column/i);
+  if (m && m[1]) return m[1];
+  return null;
+}
+
+async function upsertTable(table, rows) {
+  if (!rows || !rows.length) return;
+
+  // 1) normalize rows for DB
+  let dbRows = rows.map(r => toDbRow(table, r));
+  // toDbRow can be async; resolve if needed
+  dbRows = await Promise.all(dbRows);
+
+  // 2) remove common UI-only fields
+  dbRows = dbRows.map(r => {
+    const x = { ...r };
+    delete x.attachments;
+    delete x.timeline;
+    delete x.periods;
+    return x;
+  });
+
+  // 3) Try upsert, if schema-cache complains about unknown column, strip and retry
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { error } = await supabase.from(table).upsert(dbRows);
+    if (!error) return;
+
+    const missing = extractMissingColumnName(error);
+    if (missing) {
+      dbRows = stripUnknownColumnFromRows(dbRows, missing);
+      continue;
+    }
+
+    // Surface the real error
+    throw error;
   }
-  const id = row.id;
-  if (!id) return;
-  const { error } = await supabase.from(table).delete().eq("id", id);
-  if (error) throw error;
+  // last attempt failed with repeated unknown columns
+  throw new Error("Upsert failed after retries (schema mismatch).");
 }
 
 // =====================
@@ -330,16 +362,12 @@ async function fetchAllFromDB() {
     if (r.error) throw r.error;
   }
 
-  // Detect column variants (snake_case vs alternative schemas)
-  const keysOf = (arr) => (arr && arr.length ? Object.keys(arr[0] || {}) : []);
-  const vKeys = keysOf(vehicles.data || []);
-  const aKeys = keysOf(accidents.data || []);
-  const mKeys = keysOf(maintenances.data || []);
-  const bKeys = keysOf(bills.data || []);
-  DB_SCHEMA.vehicles = { has_plate: vKeys.includes("plate"), has_id: vKeys.includes("id"), has_av_start: vKeys.includes("availability_start"), has_av_end: vKeys.includes("availability_end") };
-  DB_SCHEMA.accidents = { has_status: aKeys.includes("status"), has_is_closed: aKeys.includes("is_closed"), has_closed: aKeys.includes("closed") };
-  DB_SCHEMA.maintenances = { has_status: mKeys.includes("status"), has_is_closed: mKeys.includes("is_closed"), has_closed: mKeys.includes("closed") };
-  DB_SCHEMA.bills = { has_due_date: bKeys.includes("due_date") };
+  // cache schema columns (best effort)
+  setSchemaFromRows('vehicles', vehicles.data || []);
+  setSchemaFromRows('suppliers', suppliers.data || []);
+  setSchemaFromRows('accidents', accidents.data || []);
+  setSchemaFromRows('maintenances', maintenances.data || []);
+  setSchemaFromRows('bills', bills.data || []);
 
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
   const toISO = (v) => {
@@ -377,14 +405,14 @@ async function fetchAllFromDB() {
   const accidentsNorm = (accidents.data || []).map(a => ({
     ...a,
     plate: String(a.plate || "").trim().toUpperCase(),
+    status: (a.status !== undefined && a.status !== null && a.status !== "")
+      ? a.status
+      : (a.is_closed !== undefined ? (a.is_closed ? "Chiuso" : "Aperto")
+        : (a.closed !== undefined ? (a.closed ? "Chiuso" : "Aperto")
+          : (a.is_open !== undefined ? (a.is_open ? "Aperto" : "Chiuso")
+            : (a.open !== undefined ? (a.open ? "Aperto" : "Chiuso") : "Aperto")))),
     startDate: toISO(a.startDate ?? a.start_date),
     endDate: toISO(a.endDate ?? a.end_date),
-    // Normalize status across schemas:
-    // - if DB has boolean is_closed/closed -> map to 'aperto'/'chiuso'
-    // - else keep string status
-    status: (DB_SCHEMA.accidents.has_is_closed || DB_SCHEMA.accidents.has_closed)
-      ? ((a.is_closed ?? a.closed) ? "chiuso" : "aperto")
-      : (a.status || "aperto"),
     insuranceReimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
     supplierId: a.supplierId ?? a.supplier_id ?? "",
     attachmentName: a.attachmentName ?? a.attachment_name ?? "",
@@ -394,11 +422,14 @@ async function fetchAllFromDB() {
   const maintNorm = (maintenances.data || []).map(m => ({
     ...m,
     plate: String(m.plate || "").trim().toUpperCase(),
+    status: (m.status !== undefined && m.status !== null && m.status !== "")
+      ? m.status
+      : (m.is_closed !== undefined ? (m.is_closed ? "Chiuso" : "Aperto")
+        : (m.closed !== undefined ? (m.closed ? "Chiuso" : "Aperto")
+          : (m.is_open !== undefined ? (m.is_open ? "Aperto" : "Chiuso")
+            : (m.open !== undefined ? (m.open ? "Aperto" : "Chiuso") : "Aperto")))),
     startDate: toISO(m.startDate ?? m.start_date),
     endDate: toISO(m.endDate ?? m.end_date),
-    status: (DB_SCHEMA.maintenances.has_is_closed || DB_SCHEMA.maintenances.has_closed)
-      ? ((m.is_closed ?? m.closed) ? "chiuso" : "aperto")
-      : (m.status || "aperto"),
     insuranceReimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
     supplierId: m.supplierId ?? m.supplier_id ?? "",
     attachmentName: m.attachmentName ?? m.attachment_name ?? "",
@@ -2269,7 +2300,7 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [data.vehicles, q, brand, availOn, availMode, sortKey, sortDir]);
 
-      const saveVehicle = async (veh) => {
+      const saveVehicle = (veh) => {
         // validate duplicate plates
         const plate = normalizePlate(veh.plate);
         const dup = data.vehicles.find(v => v.plate === plate && v.id !== veh.id);
@@ -2284,36 +2315,20 @@ const excelSerialToISO = (v) => {
             : [...prev.vehicles, veh];
           return { ...prev, vehicles: next };
         });
+        toast("Veicolo salvato.");
         setOpenForm(false);
         setEditing(null);
-
-        try {
-          await upsertTable("vehicles", [veh]);
-          toast("Veicolo salvato.");
-        } catch (e) {
-          console.error("Errore salvataggio veicolo DB", e);
-          toast("⚠️ Veicolo non salvato su DB: " + (e?.message || e));
-        }
       };
 
-      const delVehicle = async (id) => {
+      const delVehicle = (id) => {
         const v = data.vehicles.find(x => x.id === id);
         if (!confirm("Eliminare il veicolo " + (v?.plate || "") + "?")) return;
-        // optimistic remove
-        const row = v || data.vehicles.find(x => x.id === id) || {};
         setData(prev => ({
           ...prev,
           vehicles: prev.vehicles.filter(x => x.id !== id),
-          // keep related items for safety
+          // keep history but could remove related items: we keep for safety
         }));
-        try {
-          await deleteRowFromDB("vehicles", row);
-          toast("Veicolo eliminato.");
-        } catch (e) {
-          console.error("Errore eliminazione veicolo DB", e);
-          toast("⚠️ Veicolo non eliminato su DB: " + (e?.message || e));
-          try { await safeFetchAll(); } catch {}
-        }
+        toast("Veicolo eliminato.");
       };
 
       const cols = [
@@ -2429,8 +2444,7 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [items, q, plate, dateFrom, dateTo, onlyDueSoon, days, kind]);
 
-      const saveItem = async (payload) => {
-        // optimistic UI
+      const saveItem = (payload) => {
         setData(prev => {
           const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
           const arr = prev[key];
@@ -2438,41 +2452,18 @@ const excelSerialToISO = (v) => {
           const next = idx >= 0 ? arr.map(x => x.id === payload.id ? payload : x) : [...arr, payload];
           return { ...prev, [key]: next };
         });
+        toast("Salvato.");
         setOpenForm(false);
         setEditing(null);
-
-        // immediate DB sync to prevent "bounce back"
-        try {
-          const table = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
-          await upsertTable(table, [payload]);
-          toast("Salvato.");
-        } catch (e) {
-          console.error("Errore salvataggio DB", e);
-          toast("⚠️ Non salvato su DB: " + (e?.message || e));
-        }
       };
 
-      const delItem = async (id) => {
+      const delItem = (id) => {
         if (!confirm("Eliminare questa voce?")) return;
-
-        const table = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
-        const row = items.find(x => x.id === id);
-
-        // optimistic remove
         setData(prev => {
           const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
           return { ...prev, [key]: prev[key].filter(x => x.id !== id) };
         });
-
-        try {
-          await deleteRowFromDB(table, row);
-          toast("Eliminato.");
-        } catch (e) {
-          console.error("Errore eliminazione DB", e);
-          toast("⚠️ Non eliminato su DB: " + (e?.message || e));
-          // restore from DB truth
-          try { await safeFetchAll(); } catch {}
-        }
+        toast("Eliminato.");
       };
 
       const supplierById = useMemo(() => Object.fromEntries(data.suppliers.map(s=>[s.id,s])), [data.suppliers]);
@@ -2616,37 +2607,22 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [data.suppliers, q]);
 
-      const save = async (s) => {
+      const save = (s) => {
         setData(prev => {
           const idx = prev.suppliers.findIndex(x => x.id === s.id);
           const next = idx >= 0 ? prev.suppliers.map(x => x.id === s.id ? s : x) : [...prev.suppliers, s];
           return { ...prev, suppliers: next };
         });
+        toast("Fornitore salvato.");
         setOpenForm(false);
         setEditing(null);
-
-        try {
-          await upsertTable("suppliers", [s]);
-          toast("Fornitore salvato.");
-        } catch (e) {
-          console.error("Errore salvataggio fornitore DB", e);
-          toast("⚠️ Fornitore non salvato su DB: " + (e?.message || e));
-        }
       };
 
-      const del = async (id) => {
+      const del = (id) => {
         const s = data.suppliers.find(x => x.id === id);
         if (!confirm("Eliminare fornitore " + (s?.name || "") + "?")) return;
-        // optimistic remove
         setData(prev => ({...prev, suppliers: prev.suppliers.filter(x => x.id !== id)}));
-        try {
-          await deleteRowFromDB("suppliers", s);
-          toast("Fornitore eliminato.");
-        } catch (e) {
-          console.error("Errore eliminazione fornitore DB", e);
-          toast("⚠️ Fornitore non eliminato su DB: " + (e?.message || e));
-          try { await safeFetchAll(); } catch {}
-        }
+        toast("Fornitore eliminato.");
       };
 
       const cols = [
@@ -2834,7 +2810,7 @@ useEffect(() => {
         upsertTable("bills", data.bills),
       ]);
     } catch (e) {
-      console.error("Errore sync DB", e);
+      console.error("Errore sync DB", e?.message || e, e);
     }
   }, 800); // debounce
 
