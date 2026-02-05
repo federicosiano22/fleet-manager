@@ -165,8 +165,132 @@
   };
 }
 async function upsertTable(table, rows) {
+  // Robust upsert: map App shape -> DB columns (snake_case) and drop UI-only fields.
   if (!rows || !rows.length) return;
-  const { error } = await supabase.from(table).upsert(rows);
+
+  const ensureId = (x) => ({ ...x, id: x.id || (crypto.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2) + "-" + Date.now().toString(36))) });
+
+  const mapVehicle = (v) => ({
+    id: v.id || undefined,
+    plate: String(v.plate || "").trim().toUpperCase(),
+    brand: v.brand || "",
+    model: v.model || "",
+    year: v.year || "",
+    category: v.category || "",
+    hub: v.hub || "",
+    group: v.group || "",
+    vin: v.vin || "",
+    km: v.km ?? null,
+    availability_start: v.availabilityStart || v.availability_start || null,
+    availability_end: v.availabilityEnd || v.availability_end || null,
+    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
+    notes: v.notes || "",
+    updated_at: new Date().toISOString(),
+  });
+
+  const mapSupplier = (s0) => {
+    const s = ensureId(s0);
+    return {
+      id: s.id,
+      name: s.name || "",
+      type: s.type || "",
+      phone: s.phone || "",
+      email: s.email || "",
+      notes: s.notes || "",
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  const mapAccident = (a0) => {
+    const a = ensureId(a0);
+    return {
+      id: a.id,
+      plate: String(a.plate || "").trim().toUpperCase(),
+      date: a.date || null,
+      start_date: a.startDate || a.start_date || null,
+      end_date: a.endDate || a.end_date || null,
+      status: a.status || "aperto",
+      description: a.description || "",
+      location: a.location || "",
+      cost: a.cost ?? null,
+      insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
+      notes: a.notes || "",
+      supplier_id: a.supplierId || a.supplier_id || null,
+      attachment_name: a.attachmentName || a.attachment_name || null,
+      attachment_data: a.attachmentData || a.attachment_data || null,
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  const mapMaintenance = (m0) => {
+    const m = ensureId(m0);
+    return {
+      id: m.id,
+      plate: String(m.plate || "").trim().toUpperCase(),
+      date: m.date || null,
+      start_date: m.startDate || m.start_date || null,
+      end_date: m.endDate || m.end_date || null,
+      status: m.status || "aperto",
+      type: m.type || "",
+      km: m.km ?? null,
+      cost: m.cost ?? null,
+      insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
+      notes: m.notes || "",
+      supplier_id: m.supplierId || m.supplier_id || null,
+      attachment_name: m.attachmentName || m.attachment_name || null,
+      attachment_data: m.attachmentData || m.attachment_data || null,
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  const mapBill = (b0) => {
+    const b = ensureId(b0);
+    return {
+      id: b.id,
+      plate: String(b.plate || "").trim().toUpperCase(),
+      type: b.type || "",
+      due_date: b.dueDate || b.due_date || null,
+      amount: b.amount ?? null,
+      paid: !!b.paid,
+      supplier_id: b.supplierId || b.supplier_id || null,
+      notes: b.notes || "",
+      updated_at: new Date().toISOString(),
+    };
+  };
+
+  // Map
+  let payload = [];
+  if (table === "vehicles") payload = rows.filter(v => (v?.plate || "").trim() !== "").map(mapVehicle);
+  else if (table === "suppliers") payload = rows.map(mapSupplier);
+  else if (table === "accidents") payload = rows.map(mapAccident);
+  else if (table === "maintenances") payload = rows.map(mapMaintenance);
+  else if (table === "bills") payload = rows.map(mapBill);
+  else payload = rows;
+
+  if (!payload.length) return;
+
+  // Upsert with appropriate conflict key
+  let q = supabase.from(table);
+  if (table === "vehicles") q = q.upsert(payload, { onConflict: "plate" });
+  else q = q.upsert(payload, { onConflict: "id" });
+
+  const { error } = await q;
+  if (error) throw error;
+}
+
+async function deleteRowFromDB(table, row) {
+  // Delete by id (most tables) or by plate for vehicles
+  if (!row) return;
+  if (table === "vehicles") {
+    const plate = String(row.plate || "").trim().toUpperCase();
+    if (!plate) return;
+    const { error } = await supabase.from("vehicles").delete().eq("plate", plate);
+    if (error) throw error;
+    return;
+  }
+  const id = row.id;
+  if (!id) return;
+  const { error } = await supabase.from(table).delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -2117,7 +2241,7 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [data.vehicles, q, brand, availOn, availMode, sortKey, sortDir]);
 
-      const saveVehicle = (veh) => {
+      const saveVehicle = async (veh) => {
         // validate duplicate plates
         const plate = normalizePlate(veh.plate);
         const dup = data.vehicles.find(v => v.plate === plate && v.id !== veh.id);
@@ -2132,20 +2256,36 @@ const excelSerialToISO = (v) => {
             : [...prev.vehicles, veh];
           return { ...prev, vehicles: next };
         });
-        toast("Veicolo salvato.");
         setOpenForm(false);
         setEditing(null);
+
+        try {
+          await upsertTable("vehicles", [veh]);
+          toast("Veicolo salvato.");
+        } catch (e) {
+          console.error("Errore salvataggio veicolo DB", e);
+          toast("⚠️ Veicolo non salvato su DB: " + (e?.message || e));
+        }
       };
 
-      const delVehicle = (id) => {
+      const delVehicle = async (id) => {
         const v = data.vehicles.find(x => x.id === id);
         if (!confirm("Eliminare il veicolo " + (v?.plate || "") + "?")) return;
+        // optimistic remove
+        const row = v || data.vehicles.find(x => x.id === id) || {};
         setData(prev => ({
           ...prev,
           vehicles: prev.vehicles.filter(x => x.id !== id),
-          // keep history but could remove related items: we keep for safety
+          // keep related items for safety
         }));
-        toast("Veicolo eliminato.");
+        try {
+          await deleteRowFromDB("vehicles", row);
+          toast("Veicolo eliminato.");
+        } catch (e) {
+          console.error("Errore eliminazione veicolo DB", e);
+          toast("⚠️ Veicolo non eliminato su DB: " + (e?.message || e));
+          try { await safeFetchAll(); } catch {}
+        }
       };
 
       const cols = [
@@ -2261,7 +2401,8 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [items, q, plate, dateFrom, dateTo, onlyDueSoon, days, kind]);
 
-      const saveItem = (payload) => {
+      const saveItem = async (payload) => {
+        // optimistic UI
         setData(prev => {
           const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
           const arr = prev[key];
@@ -2269,18 +2410,41 @@ const excelSerialToISO = (v) => {
           const next = idx >= 0 ? arr.map(x => x.id === payload.id ? payload : x) : [...arr, payload];
           return { ...prev, [key]: next };
         });
-        toast("Salvato.");
         setOpenForm(false);
         setEditing(null);
+
+        // immediate DB sync to prevent "bounce back"
+        try {
+          const table = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
+          await upsertTable(table, [payload]);
+          toast("Salvato.");
+        } catch (e) {
+          console.error("Errore salvataggio DB", e);
+          toast("⚠️ Non salvato su DB: " + (e?.message || e));
+        }
       };
 
-      const delItem = (id) => {
+      const delItem = async (id) => {
         if (!confirm("Eliminare questa voce?")) return;
+
+        const table = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
+        const row = items.find(x => x.id === id);
+
+        // optimistic remove
         setData(prev => {
           const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
           return { ...prev, [key]: prev[key].filter(x => x.id !== id) };
         });
-        toast("Eliminato.");
+
+        try {
+          await deleteRowFromDB(table, row);
+          toast("Eliminato.");
+        } catch (e) {
+          console.error("Errore eliminazione DB", e);
+          toast("⚠️ Non eliminato su DB: " + (e?.message || e));
+          // restore from DB truth
+          try { await safeFetchAll(); } catch {}
+        }
       };
 
       const supplierById = useMemo(() => Object.fromEntries(data.suppliers.map(s=>[s.id,s])), [data.suppliers]);
@@ -2424,22 +2588,37 @@ const excelSerialToISO = (v) => {
         return rows;
       }, [data.suppliers, q]);
 
-      const save = (s) => {
+      const save = async (s) => {
         setData(prev => {
           const idx = prev.suppliers.findIndex(x => x.id === s.id);
           const next = idx >= 0 ? prev.suppliers.map(x => x.id === s.id ? s : x) : [...prev.suppliers, s];
           return { ...prev, suppliers: next };
         });
-        toast("Fornitore salvato.");
         setOpenForm(false);
         setEditing(null);
+
+        try {
+          await upsertTable("suppliers", [s]);
+          toast("Fornitore salvato.");
+        } catch (e) {
+          console.error("Errore salvataggio fornitore DB", e);
+          toast("⚠️ Fornitore non salvato su DB: " + (e?.message || e));
+        }
       };
 
-      const del = (id) => {
+      const del = async (id) => {
         const s = data.suppliers.find(x => x.id === id);
         if (!confirm("Eliminare fornitore " + (s?.name || "") + "?")) return;
+        // optimistic remove
         setData(prev => ({...prev, suppliers: prev.suppliers.filter(x => x.id !== id)}));
-        toast("Fornitore eliminato.");
+        try {
+          await deleteRowFromDB("suppliers", s);
+          toast("Fornitore eliminato.");
+        } catch (e) {
+          console.error("Errore eliminazione fornitore DB", e);
+          toast("⚠️ Fornitore non eliminato su DB: " + (e?.message || e));
+          try { await safeFetchAll(); } catch {}
+        }
       };
 
       const cols = [
