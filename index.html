@@ -61,7 +61,86 @@
   }
 );
 
-    async function pushAllToDB(appData) {
+    
+
+    // ---------- Attachments (Supabase Storage + attachments table) ----------
+    const ATT_BUCKET = "fleet-attachments";
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    async function requireSession() {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!data?.session) throw new Error("Sessione non valida o scaduta. Effettua di nuovo il login.");
+      return data.session;
+    }
+
+    function safeFileName(name) {
+      return String(name || "allegato").replace(/[^\w.\-]+/g, "_");
+    }
+
+    async function uploadAttachment({ entityType, entityId, file }) {
+      if (!entityId || !UUID_RE.test(String(entityId))) {
+        throw new Error("ID record non valido: salva prima il record e riprova.");
+      }
+      await requireSession();
+
+      const safeName = safeFileName(file?.name);
+      const path = `${entityType}/${entityId}/${Date.now()}_${safeName}`;
+
+      const up = await supabase.storage.from(ATT_BUCKET).upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file?.type || "application/octet-stream",
+      });
+      if (up.error) throw up.error;
+
+      const ins = await supabase.from("attachments").insert([{
+        entity_type: entityType,
+        entity_id: entityId,
+        file_path: path,
+        file_name: file?.name || safeName,
+        mime_type: file?.type || null,
+        file_size: file?.size || null,
+      }]).select("*").single();
+
+      if (ins.error) throw ins.error;
+      return ins.data;
+    }
+
+    async function listAttachments({ entityType, entityId }) {
+      if (!entityId || !UUID_RE.test(String(entityId))) return [];
+      await requireSession();
+
+      const res = await supabase
+        .from("attachments")
+        .select("*")
+        .eq("entity_type", entityType)
+        .eq("entity_id", entityId)
+        .order("created_at", { ascending: false });
+
+      if (res.error) throw res.error;
+      return res.data || [];
+    }
+
+    async function getAttachmentSignedUrl(filePath) {
+      await requireSession();
+      const res = await supabase.storage.from(ATT_BUCKET).createSignedUrl(filePath, 120); // 2 min
+      if (res.error) throw res.error;
+      return res.data.signedUrl;
+    }
+
+    async function deleteAttachment(att) {
+      if (!att?.file_path) return;
+      await requireSession();
+
+      const del = await supabase.storage.from(ATT_BUCKET).remove([att.file_path]);
+      if (del.error) throw del.error;
+
+      const db = await supabase.from("attachments").delete().eq("id", att.id);
+      if (db.error) throw db.error;
+    }
+
+async function pushAllToDB(appData) {
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
     .filter(v => (v?.plate || "").trim() !== "")
@@ -1164,6 +1243,33 @@ const excelSerialToISO = (v) => {
         }
         return merged;
       });
+      
+      const isNewItem = !initial || !initial.id;
+
+      const [remoteAttachments, setRemoteAttachments] = useState([]);
+      const [attBusy, setAttBusy] = useState(false);
+      const [attErr, setAttErr] = useState("");
+
+      const refreshAttachments = async () => {
+        if (kind !== "accident" && kind !== "maintenance") return;
+        if (!it?.id) return;
+        try {
+          setAttErr("");
+          const entityType = kind === "accident" ? "accidents" : "maintenances";
+          const atts = await listAttachments({ entityType, entityId: it.id });
+          setRemoteAttachments(atts);
+          setIt(prev => ({ ...prev, attachments: atts }));
+        } catch (e) {
+          // Non blocchiamo la form: mostriamo solo errore allegati
+          setAttErr(e?.message || "Errore caricamento allegati");
+        }
+      };
+
+      useEffect(() => {
+        refreshAttachments();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [kind, it?.id]);
+
       const set = (k,v) => setIt(prev => ({...prev,[k]:v}));
 
       const plateOk = normalizePlate(it.plate);
@@ -1171,36 +1277,80 @@ const excelSerialToISO = (v) => {
 
       const pickAttachment = async (file) => {
         if (!file) return;
-        const data = await readFileAsDataURL(file);
-        const newAtt = { id: uid(), name: file.name, data };
-        setIt(prev => ({...prev, attachments: [...(prev.attachments || []), newAtt]}));
+
+        // Bills: mantiene logica legacy (dataURL) per singolo allegato
+        if (kind === "bill") {
+          const dataUrl = await readFileAsDataURL(file);
+          setIt(prev => ({ ...prev, attachmentName: file.name, attachmentData: dataUrl }));
+          return;
+        }
+
+        // Accidents / Maintenances: Supabase Storage + tabella attachments
+        if (kind !== "accident" && kind !== "maintenance") return;
+
+        if (isNewItem) {
+          setAttErr("Salva prima il record, poi carica gli allegati.");
+          return;
+        }
+
+        try {
+          setAttErr("");
+          setAttBusy(true);
+          const entityType = kind === "accident" ? "accidents" : "maintenances";
+          await uploadAttachment({ entityType, entityId: it.id, file });
+          await refreshAttachments();
+        } catch (e) {
+          setAttErr(e?.message || "Errore upload allegato");
+        } finally {
+          setAttBusy(false);
+        }
       };
 
-      const removeAttachment = (attId) => {
-        setIt(prev => ({...prev, attachments: (prev.attachments || []).filter(a => a.id !== attId)}));
+      const removeAttachment = async (att) => {
+        if (kind === "bill") {
+          setIt(prev => ({ ...prev, attachmentName: "", attachmentData: "" }));
+          return;
+        }
+        try {
+          setAttErr("");
+          setAttBusy(true);
+          await deleteAttachment(att);
+          await refreshAttachments();
+        } catch (e) {
+          setAttErr(e?.message || "Errore eliminazione allegato");
+        } finally {
+          setAttBusy(false);
+        }
       };
-      const openAttachment = (attachmentData) => {
-        if (!attachmentData) return;
-        const a = document.createElement("a");
-        a.href = attachmentData;
-        a.target = "_blank";
-        a.rel = "noreferrer";
-        // for safety: trigger click
-        a.click();
+
+      const openAttachment = async (att) => {
+        try {
+          if (kind === "bill") {
+            if (!it.attachmentData) return;
+            const a = document.createElement("a");
+            a.href = it.attachmentData;
+            a.target = "_blank";
+            a.rel = "noreferrer";
+            a.click();
+            return;
+          }
+          const url = await getAttachmentSignedUrl(att.file_path);
+          window.open(url, "_blank", "noreferrer");
+        } catch (e) {
+          setAttErr(e?.message || "Errore apertura allegato");
+        }
       };
 
       const attachmentIcon = (att) => {
-        const data = String(att?.data || "");
-        const name = String(att?.name || "");
-        const isPdf = data.startsWith("data:application/pdf") || name.toLowerCase().endsWith(".pdf");
-        const isImg = data.startsWith("data:image/") || /\.(png|jpe?g|webp|gif)$/i.test(name);
+        const mime = String(att?.mime_type || "");
+        const name = String(att?.file_name || att?.name || "");
+        const isPdf = mime === "application/pdf" || name.toLowerCase().endsWith(".pdf");
+        const isImg = mime.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(name);
         if (isImg) return <i className="fa-regular fa-image text-sky-300"></i>;
         if (isPdf) return <i className="fa-solid fa-file-pdf text-red-400"></i>;
         return <i className="fa-regular fa-file text-white/60"></i>;
       };
-
-
-      const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.localeCompare(b.name)), [suppliers]);
+const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.localeCompare(b.name)), [suppliers]);
 
       return (
         <div className="space-y-4">
@@ -1310,14 +1460,16 @@ const excelSerialToISO = (v) => {
 
           {kind !== "bill" && (
             <div className="glass rounded-2xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <div className="font-semibold">Allegati</div>
                 <button 
                   type="button"
-                  className="btn rounded-xl px-3 py-2 text-sm" 
+                  className={"btn rounded-xl px-3 py-2 text-sm " + ((isNewItem || attBusy) ? "opacity-50 cursor-not-allowed" : "")}
+                  disabled={isNewItem || attBusy}
                   onClick={() => document.getElementById('file-input-' + it.id)?.click()}
                 >
-                  <i className="fa-solid fa-paperclip mr-2"></i>Aggiungi file
+                  <i className="fa-solid fa-paperclip mr-2"></i>
+                  {attBusy ? "Caricamento..." : "Aggiungi file"}
                 </button>
                 <input 
                   id={'file-input-' + it.id}
@@ -1331,33 +1483,46 @@ const excelSerialToISO = (v) => {
                   }} 
                 />
               </div>
-              {(it.attachments || []).length > 0 ? (
+
+              {isNewItem ? (
+                <div className="text-sm text-white/60">
+                  Salva il record per abilitare il caricamento degli allegati.
+                </div>
+              ) : null}
+
+              {attErr ? (
+                <div className="text-sm text-rose-200">{attErr}</div>
+              ) : null}
+
+              {(remoteAttachments || []).length > 0 ? (
                 <div className="space-y-2">
-                  {(it.attachments || []).map(att => (
+                  {(remoteAttachments || []).map(att => (
                     <div key={att.id} className="flex items-center justify-between gap-3 p-2 rounded-xl bg-white/5 border border-white/10">
                       <button
                         type="button"
                         className="flex items-center gap-2 truncate flex-1 text-left hover:opacity-90"
-                        onClick={() => openAttachment(att.data)}
+                        onClick={() => openAttachment(att)}
                         title="Apri"
                       >
                         {attachmentIcon(att)}
-                        <span className="text-sm truncate underline decoration-white/20 underline-offset-2">{att.name}</span>
+                        <span className="text-sm truncate underline decoration-white/20 underline-offset-2">
+                          {att.file_name}
+                        </span>
                       </button>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
                           className="btn rounded-xl px-2 py-1 text-xs"
-                          onClick={() => openAttachment(att.data)}
+                          onClick={() => openAttachment(att)}
                           title="Apri"
                         >
                           <i className="fa-solid fa-arrow-up-right-from-square"></i>
                         </button>
                         <button 
                           type="button"
-                          className="btn rounded-xl px-2 py-1 text-xs" 
-                          onClick={() => removeAttachment(att.id)}
-                          title="Rimuovi"
+                          className="btn rounded-xl px-2 py-1 text-xs"
+                          onClick={() => removeAttachment(att)}
+                          title="Elimina"
                         >
                           <i className="fa-solid fa-trash"></i>
                         </button>
