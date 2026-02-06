@@ -78,14 +78,15 @@
       return String(name || "allegato").replace(/[^\w.\-]+/g, "_");
     }
 
-    async function uploadAttachment({ entityType, entityId, file }) {
+    async function uploadAttachment({ entityType, entityId, file, category }) {
       if (!entityId || !UUID_RE.test(String(entityId))) {
         throw new Error("ID record non valido: salva prima il record e riprova.");
       }
       await requireSession();
 
       const safeName = safeFileName(file?.name);
-      const path = `${entityType}/${entityId}/${Date.now()}_${safeName}`;
+      const cat = category ? String(category).replace(/[^\w\-]+/g,'_') : null;
+      const path = `${entityType}/${entityId}/${cat ? (cat + '/') : ''}${Date.now()}_${safeName}`;
 
       const up = await supabase.storage.from(ATT_BUCKET).upload(path, file, {
         cacheControl: "3600",
@@ -156,6 +157,12 @@ async function pushAllToDB(appData) {
       group: v.group || "",
       vin: v.vin || "",
       km: v.km ?? null,
+      kw: (v.kw === '' || v.kw === null || typeof v.kw === 'undefined') ? null : Number(v.kw),
+      purchase_type: v.purchase_type || v.purchaseType || v.purchase_type || "",
+      purchase_cost: (v.purchase_cost || v.purchaseCost) ? parseNum(v.purchase_cost || v.purchaseCost) : null,
+      buyback_cost: (v.buyback_cost || v.buybackCost) ? parseNum(v.buyback_cost || v.buybackCost) : null,
+      rtr_fee: (v.rtr_fee || v.rtrFee) ? parseNum(v.rtr_fee || v.rtrFee) : null,
+      holding_cost: (v.holding_cost || v.holdingCost) ? parseNum(v.holding_cost || v.holdingCost) : null,
       availability_start: v.availabilityStart || v.availability_start || null,
       availability_end: v.availabilityEnd || v.availability_end || null,
       periods: v.periods || [],
@@ -1121,6 +1128,12 @@ const excelSerialToISO = (v) => {
             <Field label="KM (odometro)">
               <input className="w-full px-3 py-2 rounded-xl" value={v.km} onChange={e => set("km", e.target.value)} placeholder="es. 24500" />
             </Field>
+            <Field label="kW">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.kw || ""} onChange={e => set("kw", e.target.value)} placeholder="es. 250" />
+            </Field>
+            <Field label="Tipo acquisto">
+              <input className="w-full px-3 py-2 rounded-xl" value={v.purchase_type || ""} onChange={e => set("purchase_type", e.target.value)} placeholder="testo libero" />
+            </Field>
 
             <Field label="Disponibilità - Inizio" hint="Se vuoto, considerata disponibile (legacy).">
               <input type="date" className="w-full px-3 py-2 rounded-xl" value={v.availabilityStart} onChange={e => set("availabilityStart", e.target.value)} />
@@ -1351,8 +1364,8 @@ const excelSerialToISO = (v) => {
           return;
         }
 
-        // Accidents / Maintenances / Bills: Supabase Storage + tabella attachments
-        if (kind !== "accident" && kind !== "maintenance" && kind !== "bill") return;
+        // Accidents / Maintenances / Bills / Vehicles: Supabase Storage + tabella attachments
+        if (kind !== "accident" && kind !== "maintenance" && kind !== "bill" && kind !== "vehicle") return;
 
         try {
           setAttErr("");
@@ -1740,19 +1753,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const [openAccList, setOpenAccList] = useState(false);
       const [openMaintList, setOpenMaintList] = useState(false);
 
-      const openAttachment = (attachmentData) => {
-        if (!attachmentData) return;
-        const a = document.createElement("a");
-        a.href = attachmentData;
-        a.target = "_blank";
-        a.rel = "noreferrer";
-        a.click();
-      };
-
-      
-
-      return (
-        <Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
+      // --- Vehicle "Dati auto" fields (persisted on vehicles table) ---
+      const [vehMeta, setVehMeta] = useState(() => ({
+        kw: vehicle?.kw ?? "",
+        purchaseType: vehicle?.purchaseType ?? vehicle?.purchase_type ?? "",
+        purchaseCost: vehicle?.purchaseCost ?? vehi<Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
           {!vehicle ? (
             <div className="text-white/70">Veicolo non trovato.</div>
           ) : (
@@ -1920,31 +1925,202 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                 </div>
 
                 <div className="glass rounded-2xl p-4">
-                  <button className="font-semibold mb-2 underline decoration-white/20 hover:decoration-white/60" onClick={()=>setOpenMaintList(true)}>Manutenzioni</button>
+                  <div className="font-semibold mb-2">Bolli / Scadenze</div>
                   <div className="space-y-2 max-h-[260px] overflow-auto pr-1">
-                    {maints.length === 0 ? <div className="text-sm text-white/70">—</div> :
-                      maints.map(m => (
-                        <div key={m.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <div className="text-sm font-semibold">{m.type || "Manutenzione"}</div>
-                              <div className="text-xs text-white/60">{m.date || "—"}</div>
-                              {(m.startDate || m.endDate) && (
-                                <div className="text-xs text-white/50">{m.startDate || '—'} → {m.endDate || '—'}</div>
-                              )}
+                    {bills.length === 0 ? <div className="text-sm text-white/70">—</div> :
+                      bills.map(b => {
+                        const d = daysUntil(b.dueDate);
+                        const tone = b.paid ? "good" : (d === null ? "neutral" : (d < 0 ? "bad" : (d <= 7 ? "bad" : (d <= 30 ? "warn" : "info"))));
+                        return (
+                          <div key={b.id} className="p-3 rounded-xl bg-white/5 border border-white/10">
+                            <div className="flex justify-between items-start gap-2">
+                              <div>
+                                <div className="text-sm font-semibold">{b.type || "Scadenza"}</div>
+                                <div className="text-xs text-white/60">{b.dueDate || "—"} · {fmtEUR(b.amount)}</div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {b.paid ? <Badge tone="good">Pagato</Badge> : <Badge tone={tone}>{d !== null ? (d<0 ? "Scaduto" : d + "g") : "—"}</Badge>}
+                              </div>
                             </div>
-                            <div className="flex flex-col items-end gap-1">
-                              {m.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>}
-                              <div className="text-sm">{fmtEUR(m.cost)}</div>
-                              {m.insuranceReimbursement ? (
-                                <div className="text-xs text-emerald-300">-{fmtEUR(m.insuranceReimbursement)}</div>
-                              ) : null}
+                            <div className="text-xs text-white/55 mt-2 flex items-center justify-between">
+                              <span>{b.supplierId && supplierById[b.supplierId] ? supplierById[b.supplierId].name : ""}</span>
                             </div>
                           </div>
-                          {m.km ? <div className="text-xs text-white/60 mt-1">KM: {m.km}</div> : null}
-                          {m.notes && <div className="text-xs text-white/60 mt-1 line-clamp-2">{m.notes}</div>}
-                          <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
-                            <span>{m.supplierId && supplierById[m.supplierId] ? supplierById[m.supplierId].name : ""}</span>
+                        );
+                      })
+                    }
+                  </div>
+                
+
+                <div className="glass rounded-2xl p-4">
+                  <div className="font-semibold mb-2">Dati auto</div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <div className="label">kW</div>
+                      <input className="input" value={vehMeta.kw} onChange={(e)=>setVehMeta(v=>({...v, kw:e.target.value}))} placeholder="es. 250" />
+                    </div>
+                    <div>
+                      <div className="label">Tipo acquisto</div>
+                      <input className="input" value={vehMeta.purchaseType} onChange={(e)=>setVehMeta(v=>({...v, purchaseType:e.target.value}))} placeholder="testo libero" />
+                    </div>
+
+                    <div>
+                      <div className="label">Costo acquisto</div>
+                      <input className="input" value={vehMeta.purchaseCost} onChange={(e)=>setVehMeta(v=>({...v, purchaseCost:e.target.value}))} placeholder="€" />
+                    </div>
+                    <div>
+                      <div className="label">Costo buyback</div>
+                      <input className="input" value={vehMeta.buybackCost} onChange={(e)=>setVehMeta(v=>({...v, buybackCost:e.target.value}))} placeholder="€" />
+                    </div>
+                    <div>
+                      <div className="label">Canone RTR I.E.</div>
+                      <input className="input" value={vehMeta.rtrFee} onChange={(e)=>setVehMeta(v=>({...v, rtrFee:e.target.value}))} placeholder="€" />
+                    </div>
+                    <div>
+                      <div className="label">H.C.</div>
+                      <input className="input" value={vehMeta.holdingCost} onChange={(e)=>setVehMeta(v=>({...v, holdingCost:e.target.value}))} placeholder="€" />
+                    </div>
+                  </div>
+
+                  {vehMetaErr ? <div className="mt-2 text-sm text-red-300">{vehMetaErr}</div> : null}
+                  <div className="mt-3 flex justify-end">
+                    <button className="btn rounded-xl px-3 py-2 text-xs" disabled={vehMetaBusy} onClick={saveVehMeta}>
+                      {vehMetaBusy ? "Salvataggio..." : "Salva dati auto"}
+                    </button>
+                  </div>
+
+                  <div className="mt-4 border-t border-white/10 pt-4">
+                    <div className="text-sm font-semibold mb-2">Fatture</div>
+                    {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-sm font-semibold">Fattura acquisto</div>
+                          <label className="btn rounded-lg px-2 py-1 text-xs cursor-pointer">
+                            <i className="fa-solid fa-paperclip mr-1"></i>Carica
+                            <input type="file" multiple className="hidden" onChange={(e)=>uploadVehDocs("purchase_invoice", e.target.files)} />
+                          </label>
+                        </div>
+                        {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
+                          (vehDocs.purchase?.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {vehDocs.purchase.map(att => (
+                                <div key={att.id} className="flex items-center gap-1">
+                                  <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openVehAttachment(att)} title="Apri">
+                                    <i className="fa-solid fa-file mr-1"></i>{att.file_name?.length>18? att.file_name.slice(0,15)+'...': att.file_name}
+                                  </button>
+                                  <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>deleteVehAttachment(att)} title="Elimina">
+                                    <i className="fa-solid fa-trash"></i>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                        )}
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-sm font-semibold">Fattura vendita</div>
+                          <label className="btn rounded-lg px-2 py-1 text-xs cursor-pointer">
+                            <i className="fa-solid fa-paperclip mr-1"></i>Carica
+                            <input type="file" multiple className="hidden" onChange={(e)=>uploadVehDocs("sale_invoice", e.target.files)} />
+                          </label>
+                        </div>
+                        {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
+                          (vehDocs.sale?.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {vehDocs.sale.map(att => (
+                                <div key={att.id} className="flex items-center gap-1">
+                                  <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openVehAttachment(att)} title="Apri">
+                                    <i className="fa-solid fa-file mr-1"></i>{att.file_name?.length>18? att.file_name.slice(0,15)+'...': att.file_name}
+                                  </button>
+                                  <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>deleteVehAttachment(att)} title="Elimina">
+                                    <i className="fa-solid fa-trash"></i>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+
+                <div className="glass rounded-2xl p-4">
+                  <div className="font-semibold mb-2">Contratto</div>
+                  {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm text-white/70">Allega il contratto della macchina e aprilo quando serve.</div>
+                    <label className="btn rounded-lg px-2 py-1 text-xs cursor-pointer">
+                      <i className="fa-solid fa-paperclip mr-1"></i>Carica
+                      <input type="file" multiple className="hidden" onChange={(e)=>uploadVehDocs("contract", e.target.files)} />
+                    </label>
+                  </div>
+
+                  {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
+                    (vehDocs.contract?.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {vehDocs.contract.map(att => (
+                          <div key={att.id} className="flex items-center gap-1">
+                            <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openVehAttachment(att)} title="Apri">
+                              <i className="fa-solid fa-file-contract mr-1"></i>{att.file_name?.length>18? att.file_name.slice(0,15)+'...': att.file_name}
+                            </button>
+                            <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>deleteVehAttachment(att)} title="Elimina">
+                              <i className="fa-solid fa-trash"></i>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>)
+                  )}
+                </div>
+
+</div>
+              </div>
+
+              {vehicle.notes ? (
+                <div className="glass rounded-2xl p-4">
+                  <div className="font-semibold mb-2">Note veicolo</div>
+                  <div className="text-sm text-white/75 whitespace-pre-wrap">{vehicle.notes}</div>
+                </div>
+              ) : null}
+            </div>
+          )}
+          {/* Elenchi dettagliati */}
+          <Modal open={openAccList} wide title={"Sinistri — " + plate} onClose={()=>setOpenAccList(false)}>
+            <Table
+              columns={[
+                { key:"date", label:"Data" },
+                { key:"period", label:"Periodo", render:(a)=> (a.startDate || a.endDate) ? `${a.startDate || '—'} → ${a.endDate || '—'}` : '—' },
+                { key:"status", label:"Stato", render:(a)=> (a.status === "chiuso" ? <Badge tone="good">Chiuso</Badge> : <Badge tone="warn">Aperto</Badge>) },
+                { key:"description", label:"Descrizione", render:(a)=> <div className="max-w-xs truncate" title={a.notes || a.description}>{a.notes || a.description || '—'}</div> },
+                { key:"cost", label:"Costo", render:(a)=> fmtEUR(a.cost) },
+                { key:"attachments", label:"PDF", render:(a)=> {
+                    const atts = (a.attachments && a.attachments.length) ? a.attachments
+                      : (a.attachmentName && a.attachmentData ? [{ id:"legacy", name:a.attachmentName, data:a.attachmentData }] : []);
+                    return atts.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {atts.map(att => (
+                          <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
+                            <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
+                          </button>
+                        ))}
+                      </div>
+                    ) : '—';
+                  } 
+                },
+              ]}
+              rows={accidents}
+              rowKey={(r)=>r.id}
+              emptyText="Nessun sinistro per questo veicolo."
+            />
+                                    <span>{m.supplierId && supplierById[m.supplierId] ? supplierById[m.supplierId].name : ""}</span>
                           </div>
                           {(m.attachments && m.attachments.length > 0) && (
                             <div className="mt-2 flex flex-wrap gap-1">
@@ -2907,17 +3083,13 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             { key:"cost", label:"Costo", render:(m)=> fmtEUR(m.cost) },
             { key:"reimbursement", label:"Rimborso", render:(m)=> fmtEUR(m.insuranceReimbursement) },
             { key:"attachments", label:"PDF", render:(m)=> {
-              const atts = (m.attachments && m.attachments.length) ? m.attachments
-                : (m.attachmentName && m.attachmentData ? [{ id:"legacy", name:m.attachmentName, data:m.attachmentData }] : []);
-              return atts.length ? (
-                <div className="flex flex-wrap gap-1">
-                  {atts.map(att => (
-                    <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
-                      <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
-                    </button>
-                  ))}
-                </div>
-              ) : '—';
+              if (!entityType) return "—";
+              const cnt = attachmentCounts[m.id] || 0;
+              return cnt ? (
+                <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachmentsFor(m)} title="Apri allegati">
+                  <i className="fa-solid fa-paperclip mr-1"></i>{cnt}
+                </button>
+              ) : "—";
             } },
             { key:"actions", label:"", render:(m)=> (
               <div className="flex gap-2 justify-end">
