@@ -42,7 +42,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useEffect, useMemo, useRef, useState } = React;
+const { useEffect, useMemo, useRef, useState } = React;
     // =====================
     // Supabase init
     // =====================
@@ -1757,7 +1757,14 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const [vehMeta, setVehMeta] = useState(() => ({
         kw: vehicle?.kw ?? "",
         purchaseType: vehicle?.purchaseType ?? vehicle?.purchase_type ?? "",
-        purchaseCost: vehicle?.purchaseCost ?? vehi<Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
+        purchaseCost: vehicle?.purchaseCost ?? vehicle?.purchase_cost ?? "",
+        buybackCost: vehicle?.buybackCost ?? vehicle?.buyback_cost ?? "",
+        rtrFee: vehicle?.rtrFee ?? vehicle?.rtr_fee ?? "",
+        holdingCost: vehicle?.holdingCost ?? vehicle?.holding_cost ?? ""
+      }));
+
+      return (
+        <Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
           {!vehicle ? (
             <div className="text-white/70">Veicolo non trovato.</div>
           ) : (
@@ -3660,6 +3667,6 @@ bills: ${res.bills}`);
     };
 
     ReactDOM.render(<FleetManagerApp />, document.getElementById("root"));
-  </script>
+</script>
 </body>
 </html>
