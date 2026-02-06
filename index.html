@@ -2011,7 +2011,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </label>
                         </div>
                         {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                          (vehDocs.purchase?.length ? (
+                          vehDocs.purchase?.length ? (
                             <div className="flex flex-wrap gap-2">
                               {vehDocs.purchase.map(att => (
                                 <div key={att.id} className="flex items-center gap-1">
@@ -2024,7 +2024,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                                 </div>
                               ))}
                             </div>
-                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>
                         )}
                       </div>
 
@@ -2037,7 +2037,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </label>
                         </div>
                         {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                          (vehDocs.sale?.length ? (
+                          vehDocs.sale?.length ? (
                             <div className="flex flex-wrap gap-2">
                               {vehDocs.sale.map(att => (
                                 <div key={att.id} className="flex items-center gap-1">
@@ -2050,7 +2050,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                                 </div>
                               ))}
                             </div>
-                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>
                         )}
                       </div>
                     </div>
@@ -2071,7 +2071,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                   </div>
 
                   {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                    (vehDocs.contract?.length ? (
+                    vehDocs.contract?.length ? (
                       <div className="flex flex-wrap gap-2">
                         {vehDocs.contract.map(att => (
                           <div key={att.id} className="flex items-center gap-1">
@@ -2084,7 +2084,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </div>
                         ))}
                       </div>
-                    ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>)
+                    ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>
                   )}
                 </div>
 
