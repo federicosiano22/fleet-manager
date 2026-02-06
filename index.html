@@ -1762,6 +1762,178 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         rtrFee: (vehicle && (vehicle.rtrFee || vehicle.rtr_fee)) ? (vehicle.rtrFee || vehicle.rtr_fee) : "",
         holdingCost: (vehicle && (vehicle.holdingCost || vehicle.holding_cost)) ? (vehicle.holdingCost || vehicle.holding_cost) : ""
       }));
+      const [vehMetaBusy, setVehMetaBusy] = useState(false);
+      const [vehMetaErr, setVehMetaErr] = useState("");
+
+      // --- Vehicle documents ---
+      const [vehDocs, setVehDocs] = useState({ purchase: [], sale: [], contract: [] });
+      const [vehDocsBusy, setVehDocsBusy] = useState(false);
+      const [vehDocsErr, setVehDocsErr] = useState("");
+
+      // Load vehicle documents
+      useEffect(() => {
+        if (!vehicle) return;
+        setVehDocsBusy(true);
+        setVehDocsErr("");
+        fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
+          headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+        })
+        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then(docs => {
+          const byType = { purchase: [], sale: [], contract: [] };
+          docs.forEach(d => {
+            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
+            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
+            else if (d.doc_type === "contract") byType.contract.push(d);
+          });
+          setVehDocs(byType);
+        })
+        .catch(e => setVehDocsErr(String(e)))
+        .finally(() => setVehDocsBusy(false));
+      }, [vehicle]);
+
+      const saveVehMeta = async () => {
+        if (!vehicle) return;
+        setVehMetaBusy(true);
+        setVehMetaErr("");
+        try {
+          const res = await fetch(SUPABASE_URL + "/rest/v1/vehicles?id=eq." + vehicle.id, {
+            method: "PATCH",
+            headers: {
+              "apikey": SUPABASE_KEY,
+              "Authorization": "Bearer " + SUPABASE_KEY,
+              "Content-Type": "application/json",
+              "Prefer": "return=minimal"
+            },
+            body: JSON.stringify({
+              kw: vehMeta.kw || null,
+              purchase_type: vehMeta.purchaseType || null,
+              purchase_cost: vehMeta.purchaseCost || null,
+              buyback_cost: vehMeta.buybackCost || null,
+              rtr_fee: vehMeta.rtrFee || null,
+              holding_cost: vehMeta.holdingCost || null
+            })
+          });
+          if (!res.ok) throw new Error(res.statusText);
+          // Successfully saved
+        } catch (e) {
+          setVehMetaErr(String(e));
+        } finally {
+          setVehMetaBusy(false);
+        }
+      };
+
+      const uploadVehDocs = async (docType, files) => {
+        if (!vehicle || !files || !files.length) return;
+        setVehDocsBusy(true);
+        setVehDocsErr("");
+        try {
+          for (const file of Array.from(files)) {
+            const fileName = Date.now() + "_" + file.name;
+            const storagePath = `vehicle_docs/${vehicle.id}/${fileName}`;
+            
+            // Upload file to storage
+            const uploadRes = await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + storagePath, {
+              method: "POST",
+              headers: {
+                "apikey": SUPABASE_KEY,
+                "Authorization": "Bearer " + SUPABASE_KEY,
+                "Content-Type": file.type || "application/octet-stream"
+              },
+              body: file
+            });
+            if (!uploadRes.ok) throw new Error("Upload failed: " + uploadRes.statusText);
+            
+            // Create database record
+            const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs", {
+              method: "POST",
+              headers: {
+                "apikey": SUPABASE_KEY,
+                "Authorization": "Bearer " + SUPABASE_KEY,
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal"
+              },
+              body: JSON.stringify({
+                vehicle_id: vehicle.id,
+                doc_type: docType,
+                file_name: file.name,
+                storage_path: storagePath
+              })
+            });
+            if (!dbRes.ok) throw new Error("DB insert failed: " + dbRes.statusText);
+          }
+          
+          // Reload docs
+          const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
+            headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+          }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
+          
+          const byType = { purchase: [], sale: [], contract: [] };
+          docs.forEach(d => {
+            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
+            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
+            else if (d.doc_type === "contract") byType.contract.push(d);
+          });
+          setVehDocs(byType);
+        } catch (e) {
+          setVehDocsErr(String(e));
+        } finally {
+          setVehDocsBusy(false);
+        }
+      };
+
+      const openVehAttachment = async (doc) => {
+        try {
+          const url = SUPABASE_URL + "/storage/v1/object/public/fleet-manager/" + doc.storage_path;
+          window.open(url, "_blank");
+        } catch (e) {
+          setVehDocsErr(String(e));
+        }
+      };
+
+      const deleteVehAttachment = async (doc) => {
+        if (!confirm("Eliminare " + doc.file_name + "?")) return;
+        setVehDocsBusy(true);
+        setVehDocsErr("");
+        try {
+          // Delete from database
+          const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?id=eq." + doc.id, {
+            method: "DELETE",
+            headers: {
+              "apikey": SUPABASE_KEY,
+              "Authorization": "Bearer " + SUPABASE_KEY,
+              "Prefer": "return=minimal"
+            }
+          });
+          if (!dbRes.ok) throw new Error("DB delete failed: " + dbRes.statusText);
+          
+          // Delete from storage
+          await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + doc.storage_path, {
+            method: "DELETE",
+            headers: {
+              "apikey": SUPABASE_KEY,
+              "Authorization": "Bearer " + SUPABASE_KEY
+            }
+          });
+          
+          // Reload docs
+          const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
+            headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+          }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
+          
+          const byType = { purchase: [], sale: [], contract: [] };
+          docs.forEach(d => {
+            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
+            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
+            else if (d.doc_type === "contract") byType.contract.push(d);
+          });
+          setVehDocs(byType);
+        } catch (e) {
+          setVehDocsErr(String(e));
+        } finally {
+          setVehDocsBusy(false);
+        }
+      };
 
       return (
         <Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
@@ -2011,7 +2183,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </label>
                         </div>
                         {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                          (vehDocs.purchase?.length ? (
+                          vehDocs.purchase?.length ? (
                             <div className="flex flex-wrap gap-2">
                               {vehDocs.purchase.map(att => (
                                 <div key={att.id} className="flex items-center gap-1">
@@ -2024,7 +2196,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                                 </div>
                               ))}
                             </div>
-                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>
                         )}
                       </div>
 
@@ -2037,7 +2209,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </label>
                         </div>
                         {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                          (vehDocs.sale?.length ? (
+                          vehDocs.sale?.length ? (
                             <div className="flex flex-wrap gap-2">
                               {vehDocs.sale.map(att => (
                                 <div key={att.id} className="flex items-center gap-1">
@@ -2050,7 +2222,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                                 </div>
                               ))}
                             </div>
-                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>)
+                          ) : <div className="text-sm text-white/60">Nessun allegato.</div>
                         )}
                       </div>
                     </div>
@@ -2071,7 +2243,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                   </div>
 
                   {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
-                    (vehDocs.contract?.length ? (
+                    vehDocs.contract?.length ? (
                       <div className="flex flex-wrap gap-2">
                         {vehDocs.contract.map(att => (
                           <div key={att.id} className="flex items-center gap-1">
@@ -2084,10 +2256,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                           </div>
                         ))}
                       </div>
-                    ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>)
+                    ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>
                   )}
                 </div>
 
+</div>
               </div>
 
               {vehicle.notes ? (
