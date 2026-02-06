@@ -2545,6 +2545,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const [plate, setPlate] = useState("");
       const [dateFrom, setDateFrom] = useState("");
       const [dateTo, setDateTo] = useState("");
+      const [statusFilter, setStatusFilter] = useState("");
       const [onlyDueSoon, setOnlyDueSoon] = useState(false); // bills
       const [days, setDays] = useState(30);
 
@@ -2629,6 +2630,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           rows = rows.filter(x => JSON.stringify(x).toLowerCase().includes(qq));
         }
 
+        if (kind !== "bill" && statusFilter) {
+          const sf = statusFilter.toLowerCase();
+          rows = rows.filter(x => String(x.status || "").toLowerCase() === sf);
+        }
+
         if (kind === "bill") {
           if (onlyDueSoon) {
             rows = rows.filter(b => !b.paid && daysUntil(b.dueDate) !== null && daysUntil(b.dueDate) <= Number(days || 30));
@@ -2640,7 +2646,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           rows.sort((a,b)=> (b.date||"").localeCompare(a.date||""));
         }
         return rows;
-      }, [items, q, plate, dateFrom, dateTo, onlyDueSoon, days, kind]);
+      }, [items, q, plate, dateFrom, dateTo, statusFilter, onlyDueSoon, days, kind]);
 
       const saveItem = async (payload) => {
         // optimistic UI
@@ -2792,6 +2798,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                   <>
                     <input type="date" className="px-3 py-2 rounded-xl text-sm" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
                     <input type="date" className="px-3 py-2 rounded-xl text-sm" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+                    <select className="px-3 py-2 rounded-xl text-sm min-w-[160px]" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}>
+                      <option value="">Stato (tutti)</option>
+                      <option value="Aperto">Aperte</option>
+                      <option value="Chiuso">Chiuse</option>
+                    </select>
                   </>
                 )}
               </div>
