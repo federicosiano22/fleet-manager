@@ -156,7 +156,7 @@ async function pushAllToDB(appData) {
       hub: v.hub || "",
       group: v.group || "",
       vin: v.vin || "",
-      km: v.km ?? null,
+      km: v.km || null,
       kw: (v.kw === '' || v.kw === null || typeof v.kw === 'undefined') ? null : Number(v.kw),
       purchase_type: v.purchase_type || v.purchaseType || v.purchase_type || "",
       purchase_cost: (v.purchase_cost || v.purchaseCost) ? parseNum(v.purchase_cost || v.purchaseCost) : null,
@@ -199,8 +199,8 @@ async function pushAllToDB(appData) {
     status: a.status || "",
     description: a.description || "",
     location: a.location || "",
-    cost: a.cost ?? null,
-    insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
+    cost: a.cost || null,
+    insurance_reimbursement: a.insuranceReimbursement || a.insurance_reimbursement || null,
     notes: a.notes || "",
     supplier_id: a.supplierId || a.supplier_id || null,
     updated_at: new Date().toISOString(),
@@ -214,9 +214,9 @@ async function pushAllToDB(appData) {
     end_date: m.endDate || m.end_date || null,
     status: m.status || "",
     type: m.type || "",
-    km: m.km ?? null,
-    cost: m.cost ?? null,
-    insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
+    km: m.km || null,
+    cost: m.cost || null,
+    insurance_reimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
     notes: m.notes || "",
     supplier_id: m.supplierId || m.supplier_id || null,
     updated_at: new Date().toISOString(),
@@ -227,11 +227,11 @@ async function pushAllToDB(appData) {
     plate: (b.plate || "").trim().toUpperCase(),
     type: b.type || "",
     due_date: b.dueDate || b.due_date || null,
-    amount: b.amount ?? null,
+    amount: b.amount || null,
     paid: !!b.paid,
     supplier_id: b.supplierId || b.supplier_id || null,
     notes: b.notes || "",
-    is_recurring: !!(b.isRecurring ?? b.is_recurring),
+    is_recurring: !!(b.isRecurring || b.is_recurring),
     recurrence_rule: b.recurrenceRule || b.recurrence_rule || "",
     next_due: (b.nextDue || b.next_due || null),
     updated_at: new Date().toISOString(),
@@ -273,7 +273,7 @@ async function upsertTable(table, rows) {
     hub: v.hub || "",
     group: v.group || "",
     vin: v.vin || "",
-    km: v.km ?? null,
+    km: v.km || null,
     availability_start: v.availabilityStart || v.availability_start || null,
     availability_end: v.availabilityEnd || v.availability_end || null,
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
@@ -305,8 +305,8 @@ async function upsertTable(table, rows) {
       status: a.status || "aperto",
       description: a.description || "",
       location: a.location || "",
-      cost: a.cost ?? null,
-      insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
+      cost: a.cost || null,
+      insurance_reimbursement: a.insuranceReimbursement || a.insurance_reimbursement || null,
       notes: a.notes || "",
       supplier_id: a.supplierId || a.supplier_id || null,
       updated_at: new Date().toISOString(),
@@ -323,9 +323,9 @@ async function upsertTable(table, rows) {
       end_date: m.endDate || m.end_date || null,
       status: m.status || "aperto",
       type: m.type || "",
-      km: m.km ?? null,
-      cost: m.cost ?? null,
-      insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
+      km: m.km || null,
+      cost: m.cost || null,
+      insurance_reimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
       notes: m.notes || "",
       supplier_id: m.supplierId || m.supplier_id || null,
       updated_at: new Date().toISOString(),
@@ -339,11 +339,11 @@ async function upsertTable(table, rows) {
       plate: String(b.plate || "").trim().toUpperCase(),
       type: b.type || "",
       due_date: b.dueDate || b.due_date || null,
-      amount: b.amount ?? null,
+      amount: b.amount || null,
       paid: !!b.paid,
       supplier_id: b.supplierId || b.supplier_id || null,
       notes: b.notes || "",
-      is_recurring: !!(b.isRecurring ?? b.is_recurring),
+      is_recurring: !!(b.isRecurring || b.is_recurring),
       recurrence_rule: b.recurrenceRule || b.recurrence_rule || "",
       next_due: (b.nextDue || b.next_due || null),
       updated_at: new Date().toISOString(),
@@ -442,41 +442,41 @@ async function fetchAllFromDB() {
   const vehiclesNorm = (vehicles.data || []).map(v => ({
     ...v,
     plate: String(v.plate || "").trim().toUpperCase(),
-    availabilityStart: toISO(v.availabilityStart ?? v.availability_start),
-    availabilityEnd: toISO(v.availabilityEnd ?? v.availability_end),
+    availabilityStart: toISO(v.availabilityStart || v.availability_start),
+    availabilityEnd: toISO(v.availabilityEnd || v.availability_end),
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
   }));
 
   const accidentsNorm = (accidents.data || []).map(a => ({
     ...a,
     plate: String(a.plate || "").trim().toUpperCase(),
-    startDate: toISO(a.startDate ?? a.start_date),
-    endDate: toISO(a.endDate ?? a.end_date),
-    insuranceReimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
-    supplierId: a.supplierId ?? a.supplier_id ?? "",
-    attachmentName: a.attachmentName ?? a.attachment_name ?? "",
-    attachmentData: a.attachmentData ?? a.attachment_data ?? "",
+    startDate: toISO(a.startDate || a.start_date),
+    endDate: toISO(a.endDate || a.end_date),
+    insuranceReimbursement: a.insuranceReimbursement || a.insurance_reimbursement || null,
+    supplierId: a.supplierId || a.supplier_id || "",
+    attachmentName: a.attachmentName || a.attachment_name || "",
+    attachmentData: a.attachmentData || a.attachment_data || "",
   }));
 
   const maintNorm = (maintenances.data || []).map(m => ({
     ...m,
     plate: String(m.plate || "").trim().toUpperCase(),
-    startDate: toISO(m.startDate ?? m.start_date),
-    endDate: toISO(m.endDate ?? m.end_date),
-    insuranceReimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
-    supplierId: m.supplierId ?? m.supplier_id ?? "",
-    attachmentName: m.attachmentName ?? m.attachment_name ?? "",
-    attachmentData: m.attachmentData ?? m.attachment_data ?? "",
+    startDate: toISO(m.startDate || m.start_date),
+    endDate: toISO(m.endDate || m.end_date),
+    insuranceReimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
+    supplierId: m.supplierId || m.supplier_id || "",
+    attachmentName: m.attachmentName || m.attachment_name || "",
+    attachmentData: m.attachmentData || m.attachment_data || "",
   }));
 
   const billsNorm = (bills.data || []).map(b => ({
     ...b,
     plate: String(b.plate || "").trim().toUpperCase(),
-    dueDate: toISO(b.dueDate ?? b.due_date),
-    supplierId: b.supplierId ?? b.supplier_id ?? "",
-    isRecurring: !!(b.isRecurring ?? b.is_recurring),
-    recurrenceRule: b.recurrenceRule ?? b.recurrence_rule ?? "",
-    nextDue: toISO(b.nextDue ?? b.next_due),
+    dueDate: toISO(b.dueDate || b.due_date),
+    supplierId: b.supplierId || b.supplier_id || "",
+    isRecurring: !!(b.isRecurring || b.is_recurring),
+    recurrenceRule: b.recurrenceRule || b.recurrence_rule || "",
+    nextDue: toISO(b.nextDue || b.next_due),
   }));
 
   return {
@@ -1053,7 +1053,7 @@ const excelSerialToISO = (v) => {
                 <tr key={rowKey(r)} className="border-b border-white/5 hover:bg-white/5">
                   {columns.map(c => (
                     <td key={c.key} className="px-4 py-3 align-top">
-                      {c.render ? c.render(r) : (r[c.key] ?? "")}
+                      {c.render ? c.render(r) : (r[c.key] || "")}
                     </td>
                   ))}
                 </tr>
@@ -1755,12 +1755,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
       // --- Vehicle "Dati auto" fields (persisted on vehicles table) ---
       const [vehMeta, setVehMeta] = useState(() => ({
-        kw: vehicle?.kw ?? "",
-        purchaseType: vehicle?.purchaseType ?? vehicle?.purchase_type ?? "",
-        purchaseCost: vehicle?.purchaseCost ?? vehicle?.purchase_cost ?? "",
-        buybackCost: vehicle?.buybackCost ?? vehicle?.buyback_cost ?? "",
-        rtrFee: vehicle?.rtrFee ?? vehicle?.rtr_fee ?? "",
-        holdingCost: vehicle?.holdingCost ?? vehicle?.holding_cost ?? ""
+        kw: (vehicle && vehicle.kw) ? vehicle.kw : "",
+        purchaseType: (vehicle && (vehicle.purchaseType || vehicle.purchase_type)) ? (vehicle.purchaseType || vehicle.purchase_type) : "",
+        purchaseCost: (vehicle && (vehicle.purchaseCost || vehicle.purchase_cost)) ? (vehicle.purchaseCost || vehicle.purchase_cost) : "",
+        buybackCost: (vehicle && (vehicle.buybackCost || vehicle.buyback_cost)) ? (vehicle.buybackCost || vehicle.buyback_cost) : "",
+        rtrFee: (vehicle && (vehicle.rtrFee || vehicle.rtr_fee)) ? (vehicle.rtrFee || vehicle.rtr_fee) : "",
+        holdingCost: (vehicle && (vehicle.holdingCost || vehicle.holding_cost)) ? (vehicle.holdingCost || vehicle.holding_cost) : ""
       }));
 
       return (
@@ -1783,7 +1783,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                   </div>
                   <div className="mt-3 text-xs text-white/55 space-y-1">
                     <div><span className="text-white/70">VIN:</span> {vehicle.vin || "—"}</div>
-                    <div><span className="text-white/70">KM:</span> {vehicle.km ?? "—"}</div>
+                    <div><span className="text-white/70">KM:</span> {vehicle.km || "—"}</div>
                     <div><span className="text-white/70">Disponibilità:</span> {vehicle.availabilityStart || "—"} → {vehicle.availabilityEnd || "—"}</div>
                     <div className="mt-1"><span className="text-white/70">Stato (oggi):</span> {statusBadge(computeVehicleStatusOn(vehicle, todayISO()))}</div>
 
@@ -2643,7 +2643,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const dueAll = bills
         .filter(b => !b.paid && b.dueDate)
         .map(b => ({...b, inDays: daysUntil(b.dueDate)}))
-        .sort((a,b)=> (a.inDays ?? 99999) - (b.inDays ?? 99999));
+        .sort((a,b)=> (a.inDays || 99999) - (b.inDays || 99999));
 
       const due30 = dueAll.filter(x => x.inDays !== null && x.inDays <= 30);
       const overdue = dueAll.filter(x => x.inDays !== null && x.inDays < 0);
@@ -2741,8 +2741,8 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
         const dir = sortDir === "asc" ? 1 : -1;
         rows.sort((a,b) => {
-          const va = a[sortKey] ?? "";
-          const vb = b[sortKey] ?? "";
+          const va = a[sortKey] || "";
+          const vb = b[sortKey] || "";
           if (sortKey === "km") return dir * ((va||0) - (vb||0));
           return dir * String(va).localeCompare(String(vb));
         });
