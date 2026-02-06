@@ -547,6 +547,7 @@ const excelSerialToISO = (v) => {
     // ---------- Storage ----------
     const STORAGE_KEY = "fleet_manager_pro_v2";
     const BACKUP_TIME_KEY = "fleet_backup_last_time";
+    const BACKUP_SNOOZE_KEY = "fleet_backup_snooze_until";
     
     const loadStore = () => {
       try {
@@ -649,26 +650,35 @@ const excelSerialToISO = (v) => {
     };
 
     // Controlla se è necessario fare il backup giornaliero
-    const checkAndTriggerDailyBackup = (data) => {
+    const checkAndTriggerDailyBackup = (_data) => {
       const now = new Date();
       const currentHour = now.getHours();
       const currentDate = now.toISOString().slice(0, 10);
-      
-      // Recupera l'ultima volta che è stato fatto il backup
+
+      // Ultimo backup completato
       const lastBackupTime = localStorage.getItem(BACKUP_TIME_KEY);
       const lastBackupDate = lastBackupTime ? lastBackupTime.slice(0, 10) : null;
-      
-      // Se sono le 18:00 o dopo, e non abbiamo ancora fatto il backup oggi
+
+      // Snooze
+      const snoozeUntil = localStorage.getItem(BACKUP_SNOOZE_KEY);
+      const snoozeUntilMs = snoozeUntil ? Date.parse(snoozeUntil) : null;
+
+      // Se la modale è già aperta, non ripetere
+      if (window.__fleetBackupModalOpen) return;
+
+      // Se siamo in snooze, non mostrare
+      if (snoozeUntilMs && now.getTime() < snoozeUntilMs) return;
+
+      // Dopo le 18:00 e non abbiamo ancora fatto il backup oggi → mostra modale
       if (currentHour >= 18 && lastBackupDate !== currentDate) {
-        downloadBackupExcel(data);
-        localStorage.setItem(BACKUP_TIME_KEY, now.toISOString());
+        window.dispatchEvent(new CustomEvent("fleet:backup_due"));
       }
     };
 
     // Timer per controllare ogni minuto se è ora del backup
-    const startBackupTimer = (data) => {
+    const startBackupTimer = () => {
       setInterval(() => {
-        checkAndTriggerDailyBackup(data);
+        checkAndTriggerDailyBackup();
       }, 60000); // Controlla ogni minuto
     };
 
@@ -2699,6 +2709,42 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
     // ---------- App ----------
     const FleetManagerApp = () => {
       const [data, setData] = useState(defaultData);
+      const dataRef = useRef(data);
+      useEffect(() => { dataRef.current = data; }, [data]);
+
+      const [backupModalOpen, setBackupModalOpen] = useState(false);
+
+      // Ascolta evento "backup dovuto" (alle 18:00, una volta superato lo snooze)
+      useEffect(() => {
+        const onDue = () => {
+          window.__fleetBackupModalOpen = true;
+          setBackupModalOpen(true);
+        };
+        window.addEventListener("fleet:backup_due", onDue);
+        return () => window.removeEventListener("fleet:backup_due", onDue);
+      }, []);
+
+      const closeBackupModal = (snoozeMinutes = 30) => {
+        // snooze per evitare che riappaia ogni minuto
+        const until = new Date(Date.now() + snoozeMinutes * 60 * 1000).toISOString();
+        localStorage.setItem(BACKUP_SNOOZE_KEY, until);
+        window.__fleetBackupModalOpen = false;
+        setBackupModalOpen(false);
+      };
+
+      const downloadBackupNow = () => {
+        try {
+          downloadBackupExcel(dataRef.current);
+          localStorage.setItem(BACKUP_TIME_KEY, new Date().toISOString());
+          localStorage.removeItem(BACKUP_SNOOZE_KEY);
+        } catch (e) {
+          console.error("Backup download failed", e);
+        } finally {
+          window.__fleetBackupModalOpen = false;
+          setBackupModalOpen(false);
+        }
+      };
+
       const [view, setView] = useState("dashboard");
 
       const [session, setSession] = useState(null);
@@ -2817,7 +2863,7 @@ useEffect(() => {
 
       // Avvia il timer per il backup automatico giornaliero
       useEffect(() => {
-        startBackupTimer(data);
+        startBackupTimer();
       }, []);
 
       useEffect(() => {
@@ -2957,6 +3003,51 @@ bills: ${res.bills}`);
 
           {/* Summary modal */}
           <VehicleSummary plate={summaryPlate} data={data} onClose={()=>setSummaryPlate("")} />
+
+          {/* Backup modal (18:00) */}
+          {backupModalOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/60"></div>
+              <div className="relative glass rounded-2xl shadow-2xl w-[92%] max-w-md p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-lg font-semibold">Backup giornaliero</div>
+                    <div className="text-sm text-white/70 mt-1">
+                      Sono le 18:00 (o oltre). Vuoi scaricare il backup Excel dei dati di oggi?
+                    </div>
+                  </div>
+                  <button
+                    className="btn rounded-xl px-3 py-2 text-sm"
+                    onClick={() => closeBackupModal(60)}
+                    title="Chiudi"
+                  >
+                    <i className="fa-solid fa-xmark"></i>
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2 mt-5">
+                  <button
+                    className="btn rounded-xl px-4 py-3 text-sm font-semibold flex-1"
+                    onClick={downloadBackupNow}
+                  >
+                    <i className="fa-solid fa-download mr-2"></i>
+                    Scarica backup
+                  </button>
+                  <button
+                    className="btn rounded-xl px-4 py-3 text-sm flex-1"
+                    onClick={() => closeBackupModal(30)}
+                  >
+                    <i className="fa-regular fa-clock mr-2"></i>
+                    Più tardi (30 min)
+                  </button>
+                </div>
+
+                <div className="text-xs text-white/55 mt-3">
+                  Nota: i download automatici possono essere bloccati dal browser. Con questo pulsante il backup viene scaricato sempre.
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {/* Toast */}
           {toastMsg ? (
