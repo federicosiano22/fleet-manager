@@ -1791,8 +1791,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         .catch(e => setVehDocsErr(String(e)))
         .finally(() => setVehDocsBusy(false));
       }, [vehicle]);
-
-      const saveVehMeta = async () => {
+      const saveVehMeta = React.useCallback(async () => {
         if (!vehicle) return;
         setVehMetaBusy(true);
         setVehMetaErr("");
@@ -1820,7 +1819,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         } finally {
           setVehMetaBusy(false);
         }
-      };
+      }, [vehicle, vehMeta]);
 
       const uploadVehDocs = async (docType, files) => {
         if (!vehicle || !files || !files.length) return;
@@ -2165,7 +2164,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
                   {vehMetaErr ? <div className="mt-2 text-sm text-red-300">{vehMetaErr}</div> : null}
                   <div className="mt-3 flex justify-end">
-                    <button className="btn rounded-xl px-3 py-2 text-xs" disabled={vehMetaBusy} onClick={() => saveVehMeta()}>
+                    <button className="btn rounded-xl px-3 py-2 text-xs" disabled={vehMetaBusy} onClick={saveVehMeta}>
                       {vehMetaBusy ? "Salvataggio..." : "Salva dati auto"}
                     </button>
                   </div>
