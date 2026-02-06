@@ -1776,7 +1776,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         setVehDocsBusy(true);
         setVehDocsErr("");
         fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-          headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+          headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
         })
         .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
         .then(docs => {
@@ -1800,8 +1800,8 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           const res = await fetch(SUPABASE_URL + "/rest/v1/vehicles?id=eq." + vehicle.id, {
             method: "PATCH",
             headers: {
-              "apikey": SUPABASE_KEY,
-              "Authorization": "Bearer " + SUPABASE_KEY,
+              "apikey": SUPABASE_ANON_KEY,
+              "Authorization": "Bearer " + SUPABASE_ANON_KEY,
               "Content-Type": "application/json",
               "Prefer": "return=minimal"
             },
@@ -1836,8 +1836,8 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             const uploadRes = await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + storagePath, {
               method: "POST",
               headers: {
-                "apikey": SUPABASE_KEY,
-                "Authorization": "Bearer " + SUPABASE_KEY,
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": "Bearer " + SUPABASE_ANON_KEY,
                 "Content-Type": file.type || "application/octet-stream"
               },
               body: file
@@ -1848,8 +1848,8 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs", {
               method: "POST",
               headers: {
-                "apikey": SUPABASE_KEY,
-                "Authorization": "Bearer " + SUPABASE_KEY,
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": "Bearer " + SUPABASE_ANON_KEY,
                 "Content-Type": "application/json",
                 "Prefer": "return=minimal"
               },
@@ -1865,7 +1865,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           
           // Reload docs
           const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-            headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
           }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
           
           const byType = { purchase: [], sale: [], contract: [] };
@@ -1900,8 +1900,8 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?id=eq." + doc.id, {
             method: "DELETE",
             headers: {
-              "apikey": SUPABASE_KEY,
-              "Authorization": "Bearer " + SUPABASE_KEY,
+              "apikey": SUPABASE_ANON_KEY,
+              "Authorization": "Bearer " + SUPABASE_ANON_KEY,
               "Prefer": "return=minimal"
             }
           });
@@ -1911,14 +1911,14 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + doc.storage_path, {
             method: "DELETE",
             headers: {
-              "apikey": SUPABASE_KEY,
-              "Authorization": "Bearer " + SUPABASE_KEY
+              "apikey": SUPABASE_ANON_KEY,
+              "Authorization": "Bearer " + SUPABASE_ANON_KEY
             }
           });
           
           // Reload docs
           const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-            headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
           }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
           
           const byType = { purchase: [], sale: [], contract: [] };
