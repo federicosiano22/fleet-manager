@@ -117,8 +117,6 @@
     insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
     notes: a.notes || "",
     supplier_id: a.supplierId || a.supplier_id || null,
-    attachment_name: a.attachmentName || a.attachment_name || null,
-    attachment_data: a.attachmentData || a.attachment_data || null,
     updated_at: new Date().toISOString(),
   }));
 
@@ -135,8 +133,6 @@
     insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
     notes: m.notes || "",
     supplier_id: m.supplierId || m.supplier_id || null,
-    attachment_name: m.attachmentName || m.attachment_name || null,
-    attachment_data: m.attachmentData || m.attachment_data || null,
     updated_at: new Date().toISOString(),
   }));
 
@@ -224,8 +220,6 @@ async function upsertTable(table, rows) {
       insurance_reimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
       notes: a.notes || "",
       supplier_id: a.supplierId || a.supplier_id || null,
-      attachment_name: a.attachmentName || a.attachment_name || null,
-      attachment_data: a.attachmentData || a.attachment_data || null,
       updated_at: new Date().toISOString(),
     };
   };
@@ -245,8 +239,6 @@ async function upsertTable(table, rows) {
       insurance_reimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
       notes: m.notes || "",
       supplier_id: m.supplierId || m.supplier_id || null,
-      attachment_name: m.attachmentName || m.attachment_name || null,
-      attachment_data: m.attachmentData || m.attachment_data || null,
       updated_at: new Date().toISOString(),
     };
   };
