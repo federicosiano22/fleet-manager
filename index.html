@@ -2128,10 +2128,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                       })
                     }
                   </div>
-                
+                </div>
+              </div>
 
-                <div className="glass rounded-2xl p-4">
-                  <div className="font-semibold mb-2">Dati auto</div>
+              {/* Sezione Dati auto, Fatture e Contratto */}
+              <div className="glass rounded-2xl p-4">
+                <div className="font-semibold mb-2">Dati auto</div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
@@ -2167,10 +2169,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                       {vehMetaBusy ? "Salvataggio..." : "Salva dati auto"}
                     </button>
                   </div>
+                </div>
 
-                  <div className="mt-4 border-t border-white/10 pt-4">
-                    <div className="text-sm font-semibold mb-2">Fatture</div>
-                    {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+                {/* Sezione Fatture e Contratto */}
+                <div className="glass rounded-2xl p-4">
+                  <div className="text-sm font-semibold mb-2">Fatture</div>
+                  {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="p-3 rounded-xl bg-white/5 border border-white/10">
@@ -2226,12 +2230,10 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                       </div>
                     </div>
                   </div>
-                </div>
 
-
-                <div className="glass rounded-2xl p-4">
-                  <div className="font-semibold mb-2">Contratto</div>
-                  {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+                  <div className="mt-4 border-t border-white/10 pt-4">
+                    <div className="font-semibold mb-2">Contratto</div>
+                    {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
 
                   <div className="flex items-center justify-between mb-3">
                     <div className="text-sm text-white/70">Allega il contratto della macchina e aprilo quando serve.</div>
@@ -2258,8 +2260,6 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                     ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>
                   )}
                 </div>
-
-</div>
               </div>
 
               {vehicle.notes ? (
