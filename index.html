@@ -48,6 +48,9 @@ const { useEffect, useMemo, useRef, useState } = React;
     // =====================
     const SUPABASE_URL = "https://pajdgababkkxgmfxzazq.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhamRnYWJhYmtreGdtZnh6YXpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyOTMyNjEsImV4cCI6MjA4NTg2OTI2MX0.0PZBJl7XZpwsx3yHupMKPR2BDMKgT9CXwGiIUMw0gWU";
+    const STORAGE_BUCKET = "fleet-manager";
+    const ENABLE_REALTIME = false; // set true only if Realtime is enabled in your Supabase project
+
     console.log("SUPABASE_URL =", SUPABASE_URL);
     const supabase = window.supabase.createClient(
   SUPABASE_URL,
@@ -1778,7 +1781,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
           headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
         })
-        .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
+        .then(async r => {
+          if (r.status === 404) return [];
+          if (r.ok) return r.json();
+          const t = await r.text().catch(() => "");
+          throw new Error((t || r.statusText || "Request failed") + " (HTTP " + r.status + ")");
+        })
         .then(docs => {
           const byType = { purchase: [], sale: [], contract: [] };
           docs.forEach(d => {
@@ -1831,17 +1839,26 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             const storagePath = `vehicle_docs/${vehicle.id}/${fileName}`;
             
             // Upload file to storage
-            const uploadRes = await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + storagePath, {
+            // NOTE: requires Storage bucket + policy that allows INSERT for anon/auth users.
+            const safePath = storagePath.split("/").map(encodeURIComponent).join("/");
+            const uploadUrl = SUPABASE_URL + "/storage/v1/object/" + STORAGE_BUCKET + "/" + safePath;
+
+            const uploadRes = await fetch(uploadUrl, {
               method: "POST",
               headers: {
                 "apikey": SUPABASE_ANON_KEY,
                 "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+                "x-upsert": "true",
                 "Content-Type": file.type || "application/octet-stream"
               },
               body: file
             });
-            if (!uploadRes.ok) throw new Error("Upload failed: " + uploadRes.statusText);
-            
+
+            const uploadBody = await uploadRes.text().catch(() => "");
+            if (!uploadRes.ok) {
+              throw new Error("Upload failed (HTTP " + uploadRes.status + "): " + (uploadBody || uploadRes.statusText));
+            }
+
             // Create database record
             const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs", {
               method: "POST",
@@ -3473,8 +3490,12 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
       };
 useEffect(() => {
   if (!session) return;
+  if (!ENABLE_REALTIME) return;
 
-  const channel = supabase
+  let channel;
+  try {
+    channel = supabase
+
     .channel("fleet-realtime")
     .on(
       "postgres_changes",
@@ -3485,9 +3506,13 @@ useEffect(() => {
       }
     )
     .subscribe();
+  } catch (e) {
+    console.warn("Realtime connection unavailable:", e);
+    return;
+  }
 
   return () => {
-    supabase.removeChannel(channel);
+    try { if (channel) supabase.removeChannel(channel); } catch (e) {}
   };
 }, [session]);
 
