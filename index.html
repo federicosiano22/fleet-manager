@@ -53,22 +53,13 @@
       SUPABASE_URL,
       SUPABASE_ANON_KEY
     );
-
-    // --- DB schema cache (from fetched rows) ---
-    const schemaCols = {}; // table -> Set(columns)
-    const setSchemaFromRows = (table, rows) => {
-      if (!rows || !rows.length) return;
-      schemaCols[table] = new Set(Object.keys(rows[0] || {}));
-    };
-    const hasCol = (table, col) => !!(schemaCols[table] && schemaCols[table].has(col));
-
     async function pushAllToDB(appData) {
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
     .filter(v => (v?.plate || "").trim() !== "")
     .map(v => ({
       // NB: se hai id già nel backup ok, altrimenti lo ometti
-      id: v.id || undefined,
+      id: (isUUID(v.id) ? v.id : undefined),
       plate: String(v.plate).trim().toUpperCase(),
       brand: v.brand || "",
       model: v.model || "",
@@ -93,7 +84,7 @@
 
   // 2) ALTRE TABELLE: upsert su id (serve id)
   // Se qualche record non ha id, lo generiamo.
-  const ensureId = (x) => ({ ...x, id: x.id || crypto.randomUUID() });
+  const ensureId = (x) => ({ ...x, id: (isUUID(x.id) ? x.id : crypto.randomUUID()) });
 
   const suppliersRows = (appData.suppliers || []).map(ensureId).map(s => ({
     id: s.id,
@@ -173,165 +164,10 @@
     bills: r5.data?.length || 0,
   };
 }
-async function toDbRow(table, row) {
-  // Normalize app row -> DB row (snake_case, remove UI-only fields)
-  const r = row || {};
-  const pick = (obj, keys) => {
-    const out = {};
-    for (const k of keys) if (obj[k] !== undefined) out[k] = obj[k];
-    return out;
-  };
-  const iso = (v) => {
-    if (v === null || v === undefined || v === "") return null;
-    // keep YYYY-MM-DD as-is
-    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-    // accept dd/mm/yyyy from UI
-    if (typeof v === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(v)) {
-      const [dd, mm, yyyy] = v.split("/");
-      return `${yyyy}-${mm}-${dd}`;
-    }
-    // fallback: Date parse
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return v;
-    return d.toISOString().slice(0, 10);
-  };
-
-  if (table === "vehicles") {
-    // Convert known camelCase keys to DB snake_case
-    const out = {
-      ...pick(r, ["id","plate","targa","brand","model","year","category","hub","vin","km","group","notes","status"]),
-      availability_start: iso(r.availabilityStart ?? r.availability_start),
-      availability_end: iso(r.availabilityEnd ?? r.availability_end),
-    };
-    // prefer 'plate' over 'targa' if both
-    if (!out.plate && out.targa) { out.plate = out.targa; delete out.targa; }
-    return out;
-  }
-
-  if (table === "accidents") {
-    const out = {
-      ...pick(r, ["id","plate","description","cost","status","notes"]),
-      date: iso(r.date),
-      start_date: iso(r.startDate ?? r.start_date),
-      end_date: iso(r.endDate ?? r.end_date),
-      insurance_reimbursement: r.insuranceReimbursement ?? r.insurance_reimbursement,
-    };
-
-    // Map status (Aperto/Chiuso) to DB boolean columns if present
-    const s = String(out.status ?? "").toLowerCase();
-    const isClosed = (s === "chiuso" || s === "closed" || s === "1" || s === "true");
-    const isOpen = (s === "aperto" || s === "open" || s === "0" || s === "false");
-    if (hasCol(table, "is_closed")) { out.is_closed = isClosed; delete out.status; }
-    else if (hasCol(table, "closed")) { out.closed = isClosed; delete out.status; }
-    else if (hasCol(table, "is_open")) { out.is_open = isOpen; delete out.status; }
-    else if (hasCol(table, "open")) { out.open = isOpen; delete out.status; }
-
-    return out;
-  }
-
-  if (table === "maintenances") {
-    const out = {
-      ...pick(r, ["id","plate","type","km","cost","status","notes"]),
-      date: iso(r.date),
-      start_date: iso(r.startDate ?? r.start_date),
-      end_date: iso(r.endDate ?? r.end_date),
-      insurance_reimbursement: r.insuranceReimbursement ?? r.insurance_reimbursement,
-    };
-
-    // Map status (Aperto/Chiuso) to DB boolean columns if present
-    const s = String(out.status ?? "").toLowerCase();
-    const isClosed = (s === "chiuso" || s === "closed" || s === "1" || s === "true");
-    const isOpen = (s === "aperto" || s === "open" || s === "0" || s === "false");
-    if (hasCol(table, "is_closed")) { out.is_closed = isClosed; delete out.status; }
-    else if (hasCol(table, "closed")) { out.closed = isClosed; delete out.status; }
-    else if (hasCol(table, "is_open")) { out.is_open = isOpen; delete out.status; }
-    else if (hasCol(table, "open")) { out.open = isOpen; delete out.status; }
-
-    return out;
-  }
-
-  if (table === "bills") {
-    const out = {
-      ...pick(r, ["id","plate","type","notes","status","amount"]),
-      due_date: iso(r.dueDate ?? r.due_date),
-      paid_date: iso(r.paidDate ?? r.paid_date),
-      cost: r.cost,
-    };
-    return out;
-  }
-
-  if (table === "suppliers") {
-    const out = { ...r };
-    // remove obvious UI-only fields if present
-    delete out.__ui;
-    return out;
-  }
-
-  // default: strip common UI-only fields
-  const out = { ...r };
-  delete out.attachments;
-  delete out.timeline;
-  delete out.periods;
-  return out;
-}
-
-function stripUnknownColumnFromRows(rows, col) {
-  if (!col) return rows;
-  return rows.map(r => {
-    if (!r || typeof r !== "object") return r;
-    const x = { ...r };
-    delete x[col];
-    return x;
-  });
-}
-
-function extractMissingColumnName(error) {
-  const msg = (error && (error.message || error.details || error.hint)) ? (error.message || error.details || error.hint) : "";
-  // Examples:
-  // 'column "attachments" of relation "accidents" does not exist'
-  // 'Could not find the 'attachments' column of 'accidents' in the schema cache'
-  let m = msg.match(/column\s+"([^"]+)"/i);
-  if (m && m[1]) return m[1];
-  m = msg.match(/'([^']+)'\s+column/i);
-  if (m && m[1]) return m[1];
-  m = msg.match(/\'([^\']+)\'\s+column/i);
-  if (m && m[1]) return m[1];
-  return null;
-}
-
 async function upsertTable(table, rows) {
   if (!rows || !rows.length) return;
-
-  // 1) normalize rows for DB
-  let dbRows = rows.map(r => toDbRow(table, r));
-  // toDbRow can be async; resolve if needed
-  dbRows = await Promise.all(dbRows);
-
-  // 2) remove common UI-only fields
-  dbRows = dbRows.map(r => {
-    const x = { ...r };
-    delete x.attachments;
-    delete x.timeline;
-    delete x.periods;
-    return x;
-  });
-
-  // 3) Try upsert, if schema-cache complains about unknown column, strip and retry
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const { error } = await supabase.from(table).upsert(dbRows);
-    if (!error) return;
-
-    const missing = extractMissingColumnName(error);
-    if (missing) {
-      dbRows = stripUnknownColumnFromRows(dbRows, missing);
-      continue;
-    }
-
-    // Surface the real error
-    throw error;
-  }
-  // last attempt failed with repeated unknown columns
-  throw new Error("Upsert failed after retries (schema mismatch).");
+  const { error } = await supabase.from(table).upsert(rows);
+  if (error) throw error;
 }
 
 // =====================
@@ -362,100 +198,20 @@ async function fetchAllFromDB() {
     if (r.error) throw r.error;
   }
 
-  // cache schema columns (best effort)
-  setSchemaFromRows('vehicles', vehicles.data || []);
-  setSchemaFromRows('suppliers', suppliers.data || []);
-  setSchemaFromRows('accidents', accidents.data || []);
-  setSchemaFromRows('maintenances', maintenances.data || []);
-  setSchemaFromRows('bills', bills.data || []);
-
-  // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
-  const toISO = (v) => {
-    if (v === null || v === undefined || v === "") return "";
-    if (typeof v === "number" && v > 10000 && v < 100000) {
-      const d = new Date((v - 25569) * 86400 * 1000);
-      return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-    }
-    if (typeof v === "string") {
-      const s = v.trim();
-      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-      if (m) {
-        const dd = String(m[1]).padStart(2, "0");
-        const mm = String(m[2]).padStart(2, "0");
-        let yy = m[3];
-        if (yy.length === 2) yy = "20" + yy;
-        return `${yy}-${mm}-${dd}`;
-      }
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-      return s.slice(0, 10);
-    }
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-  };
-
-  const vehiclesNorm = (vehicles.data || []).map(v => ({
-    ...v,
-    plate: String(v.plate || "").trim().toUpperCase(),
-    availabilityStart: toISO(v.availabilityStart ?? v.availability_start),
-    availabilityEnd: toISO(v.availabilityEnd ?? v.availability_end),
-    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
-  }));
-
-  const accidentsNorm = (accidents.data || []).map(a => ({
-    ...a,
-    plate: String(a.plate || "").trim().toUpperCase(),
-    status: (a.status !== undefined && a.status !== null && a.status !== "")
-      ? a.status
-      : (a.is_closed !== undefined ? (a.is_closed ? "Chiuso" : "Aperto")
-        : (a.closed !== undefined ? (a.closed ? "Chiuso" : "Aperto")
-          : (a.is_open !== undefined ? (a.is_open ? "Aperto" : "Chiuso")
-            : (a.open !== undefined ? (a.open ? "Aperto" : "Chiuso") : "Aperto")))),
-    startDate: toISO(a.startDate ?? a.start_date),
-    endDate: toISO(a.endDate ?? a.end_date),
-    insuranceReimbursement: a.insuranceReimbursement ?? a.insurance_reimbursement ?? null,
-    supplierId: a.supplierId ?? a.supplier_id ?? "",
-    attachmentName: a.attachmentName ?? a.attachment_name ?? "",
-    attachmentData: a.attachmentData ?? a.attachment_data ?? "",
-  }));
-
-  const maintNorm = (maintenances.data || []).map(m => ({
-    ...m,
-    plate: String(m.plate || "").trim().toUpperCase(),
-    status: (m.status !== undefined && m.status !== null && m.status !== "")
-      ? m.status
-      : (m.is_closed !== undefined ? (m.is_closed ? "Chiuso" : "Aperto")
-        : (m.closed !== undefined ? (m.closed ? "Chiuso" : "Aperto")
-          : (m.is_open !== undefined ? (m.is_open ? "Aperto" : "Chiuso")
-            : (m.open !== undefined ? (m.open ? "Aperto" : "Chiuso") : "Aperto")))),
-    startDate: toISO(m.startDate ?? m.start_date),
-    endDate: toISO(m.endDate ?? m.end_date),
-    insuranceReimbursement: m.insuranceReimbursement ?? m.insurance_reimbursement ?? null,
-    supplierId: m.supplierId ?? m.supplier_id ?? "",
-    attachmentName: m.attachmentName ?? m.attachment_name ?? "",
-    attachmentData: m.attachmentData ?? m.attachment_data ?? "",
-  }));
-
-  const billsNorm = (bills.data || []).map(b => ({
-    ...b,
-    plate: String(b.plate || "").trim().toUpperCase(),
-    dueDate: toISO(b.dueDate ?? b.due_date),
-    supplierId: b.supplierId ?? b.supplier_id ?? "",
-  }));
-
   return {
     ...defaultData,
-    vehicles: vehiclesNorm,
+    vehicles: vehicles.data || [],
     suppliers: suppliers.data || [],
-    accidents: accidentsNorm,
-    maintenances: maintNorm,
-    bills: billsNorm,
+    accidents: accidents.data || [],
+    maintenances: maintenances.data || [],
+    bills: bills.data || [],
   };
 }
 
     // ---------- Utils ----------
-    const uid = () => Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36);
+    const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : (Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36)));
     const todayISO = () => new Date().toISOString().slice(0,10);
+    const isUUID = (v) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim());
 
     const parseNum = (v) => {
       if (v === null || v === undefined || v === "") return null;
@@ -2720,20 +2476,6 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
       const [selectedPlate, setSelectedPlate] = useState("");
       const [summaryPlate, setSummaryPlate] = useState("");
-
-
-      const applyingRemoteRef = useRef(false);
-
-      const safeFetchAll = async () => {
-        applyingRemoteRef.current = true;
-        try {
-          const dbData = await fetchAllFromDB();
-          setData(dbData);
-        } finally {
-          // Sblocca dopo aver applicato lo state (evita loop realtime -> setData -> autosync)
-          setTimeout(() => { applyingRemoteRef.current = false; }, 0);
-        }
-      };
 useEffect(() => {
   if (!session) return;
 
@@ -2743,8 +2485,8 @@ useEffect(() => {
       "postgres_changes",
       { event: "*", schema: "public", table: "*" },
       async () => {
-        if (applyingRemoteRef.current) return;
-        await safeFetchAll();
+        const dbData = await fetchAllFromDB();
+        setData(dbData);
       }
     )
     .subscribe();
@@ -2776,7 +2518,8 @@ useEffect(() => {
   (async () => {
     try {
       setLoading(true);
-      await safeFetchAll();
+      const dbData = await fetchAllFromDB();
+      setData(dbData);
     } catch (e) {
       alert("Errore caricamento dati: " + (e?.message || e));
     } finally {
@@ -2798,7 +2541,6 @@ const handleLogin = async (email, password) => {
 };
 useEffect(() => {
   if (!session) return;
-  if (applyingRemoteRef.current) return;
 
   const timeout = setTimeout(async () => {
     try {
@@ -2810,9 +2552,9 @@ useEffect(() => {
         upsertTable("bills", data.bills),
       ]);
     } catch (e) {
-      console.error("Errore sync DB", e?.message || e, e);
+      console.error("Errore sync DB", e);
     }
-  }, 800); // debounce
+  }, 500); // debounce
 
   return () => clearTimeout(timeout);
 }, [data, session]);
