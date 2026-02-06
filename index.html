@@ -224,6 +224,9 @@ async function pushAllToDB(appData) {
     paid: !!b.paid,
     supplier_id: b.supplierId || b.supplier_id || null,
     notes: b.notes || "",
+    is_recurring: !!(b.isRecurring ?? b.is_recurring),
+    recurrence_rule: b.recurrenceRule || b.recurrence_rule || "",
+    next_due: (b.nextDue || b.next_due || null),
     updated_at: new Date().toISOString(),
   }));
 
@@ -333,6 +336,9 @@ async function upsertTable(table, rows) {
       paid: !!b.paid,
       supplier_id: b.supplierId || b.supplier_id || null,
       notes: b.notes || "",
+      is_recurring: !!(b.isRecurring ?? b.is_recurring),
+      recurrence_rule: b.recurrenceRule || b.recurrence_rule || "",
+      next_due: (b.nextDue || b.next_due || null),
       updated_at: new Date().toISOString(),
     };
   };
@@ -461,6 +467,9 @@ async function fetchAllFromDB() {
     plate: String(b.plate || "").trim().toUpperCase(),
     dueDate: toISO(b.dueDate ?? b.due_date),
     supplierId: b.supplierId ?? b.supplier_id ?? "",
+    isRecurring: !!(b.isRecurring ?? b.is_recurring),
+    recurrenceRule: b.recurrenceRule ?? b.recurrence_rule ?? "",
+    nextDue: toISO(b.nextDue ?? b.next_due),
   }));
 
   return {
@@ -485,6 +494,64 @@ async function fetchAllFromDB() {
     };
 
     const normalizePlate = (p) => String(p || "").trim().toUpperCase();
+
+
+// ---------- Recurrence helpers (Bolli/Scadenze) ----------
+function ruleObjToString(rule) {
+  if (!rule || !rule.freq) return "";
+  const parts = [`FREQ=${rule.freq}`];
+  if (rule.interval && +rule.interval > 1) parts.push(`INTERVAL=${+rule.interval}`);
+  if (rule.bymonthday) parts.push(`BYMONTHDAY=${+rule.bymonthday}`);
+  if (rule.bymonth) parts.push(`BYMONTH=${+rule.bymonth}`);
+  if (rule.byday) parts.push(`BYDAY=${rule.byday}`);
+  return parts.join(";");
+}
+function parseRuleString(ruleStr) {
+  if (!ruleStr) return null;
+  const obj = {};
+  ruleStr.split(";").forEach(p => {
+    const [k,v] = p.split("=");
+    if (!k) return;
+    if (k === "FREQ") obj.freq = v;
+    else if (k === "INTERVAL") obj.interval = +v;
+    else if (k === "BYMONTHDAY") obj.bymonthday = +v;
+    else if (k === "BYMONTH") obj.bymonth = +v;
+    else if (k === "BYDAY") obj.byday = v;
+  });
+  return obj;
+}
+function getNextDue(fromDate, rule) {
+  if (!rule || !rule.freq || !fromDate) return "";
+  const from = (typeof fromDate === "string") ? new Date(fromDate) : new Date(fromDate);
+  if (isNaN(from.getTime())) return "";
+  const interval = rule.interval && rule.interval > 0 ? rule.interval : 1;
+  const next = new Date(from.getTime());
+  if (rule.freq === "DAILY") {
+    next.setDate(next.getDate() + interval);
+    return next.toISOString().slice(0,10);
+  }
+  if (rule.freq === "WEEKLY") {
+    next.setDate(next.getDate() + 7*interval);
+    return next.toISOString().slice(0,10);
+  }
+  if (rule.freq === "MONTHLY") {
+    const targetDay = rule.bymonthday || next.getDate();
+    const m0 = next.getMonth();
+    next.setMonth(m0 + interval);
+    next.setDate(targetDay);
+    if (next.getDate() !== targetDay) next.setDate(0);
+    return next.toISOString().slice(0,10);
+  }
+  if (rule.freq === "YEARLY") {
+    next.setFullYear(next.getFullYear() + interval);
+    if (rule.bymonth && rule.bymonthday) {
+      next.setMonth(rule.bymonth - 1);
+      next.setDate(rule.bymonthday);
+    }
+    return next.toISOString().slice(0,10);
+  }
+  return "";
+}
 
 // --- FIX v3.2: gestione corretta date da Excel (seriali tipo 45845)
 const excelSerialToISO = (v) => {
@@ -1231,7 +1298,7 @@ const excelSerialToISO = (v) => {
           type:"", km:"", cost:"", insuranceReimbursement: "", supplierId:"", 
           notes:"", status: "aperto", attachments: []
         };
-        return { id: uid(), plate, type:"Bollo", dueDate: todayISO(), amount:"", paid:false, attachmentName:"", attachmentData:"" };
+        return { id: uid(), plate, type:"Bollo", dueDate: todayISO(), amount:"", paid:false, supplierId:"", notes:"", isRecurring:false, recurrenceRule:"", nextDue:"", attachments: [] };
       };
 
       const [it, setIt] = useState(() => {
@@ -1251,11 +1318,11 @@ const excelSerialToISO = (v) => {
       const [attErr, setAttErr] = useState("");
 
       const refreshAttachments = async () => {
-        if (kind !== "accident" && kind !== "maintenance") return;
+        if (kind !== "accident" && kind !== "maintenance" && kind !== "bill") return;
         if (!it?.id) return;
         try {
           setAttErr("");
-          const entityType = kind === "accident" ? "accidents" : "maintenances";
+          const entityType = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
           const atts = await listAttachments({ entityType, entityId: it.id });
           setRemoteAttachments(atts);
           setIt(prev => ({ ...prev, attachments: atts }));
@@ -1275,32 +1342,30 @@ const excelSerialToISO = (v) => {
       const plateOk = normalizePlate(it.plate);
       const err = !plateOk ? "Seleziona una targa." : null;
 
-      const pickAttachment = async (file) => {
-        if (!file) return;
-
-        // Bills: mantiene logica legacy (dataURL) per singolo allegato
-        if (kind === "bill") {
-          const dataUrl = await readFileAsDataURL(file);
-          setIt(prev => ({ ...prev, attachmentName: file.name, attachmentData: dataUrl }));
-          return;
-        }
-
-        // Accidents / Maintenances: Supabase Storage + tabella attachments
-        if (kind !== "accident" && kind !== "maintenance") return;
+      const pickAttachment = async (files) => {
+        const list = Array.isArray(files) ? files : (files ? [files] : []);
+        if (!list.length) return;
 
         if (isNewItem) {
           setAttErr("Salva prima il record, poi carica gli allegati.");
           return;
         }
 
+        // Accidents / Maintenances / Bills: Supabase Storage + tabella attachments
+        if (kind !== "accident" && kind !== "maintenance" && kind !== "bill") return;
+
         try {
           setAttErr("");
           setAttBusy(true);
-          const entityType = kind === "accident" ? "accidents" : "maintenances";
-          await uploadAttachment({ entityType, entityId: it.id, file });
+          const entityType = kind === "accident" ? "accidents" : (kind === "maintenance" ? "maintenances" : "bills");
+
+          for (const file of list) {
+            await uploadAttachment({ entityType, entityId: it.id, file });
+          }
           await refreshAttachments();
         } catch (e) {
-          setAttErr(e?.message || "Errore upload allegato");
+          console.error(e);
+          setAttErr(e?.message || "Errore caricamento allegati");
         } finally {
           setAttBusy(false);
         }
@@ -1439,6 +1504,79 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
               </>
             )}
 
+
+            {kind === "bill" && (
+              <Field label="Scadenza ricorrente">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <div className="text-xs text-white/60 mb-1">Tipo</div>
+                    <select
+                      className="w-full px-3 py-2 rounded-xl"
+                      value={it.isRecurring ? (parseRuleString(it.recurrenceRule)?.freq || "MONTHLY") : "NONE"}
+                      onChange={(e)=>{
+                        const v = e.target.value;
+                        if (v === "NONE") {
+                          setIt(prev => ({...prev, isRecurring:false, recurrenceRule:"", nextDue:""}));
+                          return;
+                        }
+                        const due = it.dueDate || todayISO();
+                        let rule = null;
+                        if (v === "DAILY") rule = { freq:"DAILY", interval:1 };
+                        if (v === "WEEKLY") rule = { freq:"WEEKLY", interval:1 };
+                        if (v === "MONTHLY") rule = { freq:"MONTHLY", interval:1, bymonthday: new Date(due).getDate() };
+                        if (v === "YEARLY") rule = { freq:"YEARLY", interval:1, bymonth: (new Date(due).getMonth()+1), bymonthday: new Date(due).getDate() };
+                        const rs = ruleObjToString(rule);
+                        const nd = getNextDue(due, rule);
+                        setIt(prev => ({...prev, isRecurring:true, recurrenceRule: rs, nextDue: nd}));
+                      }}
+                    >
+                      <option value="NONE">Nessuna</option>
+                      <option value="DAILY">Giornaliera</option>
+                      <option value="WEEKLY">Settimanale</option>
+                      <option value="MONTHLY">Mensile</option>
+                      <option value="YEARLY">Annuale</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-white/60 mb-1">Intervallo</div>
+                    <input
+                      type="number"
+                      min="1"
+                      className={"w-full px-3 py-2 rounded-xl " + (!it.isRecurring ? "opacity-50" : "")}
+                      disabled={!it.isRecurring}
+                      value={(parseRuleString(it.recurrenceRule)?.interval || 1)}
+                      onChange={(e)=>{
+                        const rule = parseRuleString(it.recurrenceRule) || { freq:"MONTHLY", interval:1 };
+                        rule.interval = Math.max(1, parseInt(e.target.value || "1", 10));
+                        const due = it.dueDate || todayISO();
+                        // keep bymonthday/bymonth in sync
+                        if (rule.freq === "MONTHLY") rule.bymonthday = new Date(due).getDate();
+                        if (rule.freq === "YEARLY") { rule.bymonth = (new Date(due).getMonth()+1); rule.bymonthday = new Date(due).getDate(); }
+                        const nd = getNextDue(due, rule);
+                        setIt(prev => ({...prev, recurrenceRule: ruleObjToString(rule), nextDue: nd}));
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-white/60 mb-1">Prossima scadenza</div>
+                    <input
+                      type="date"
+                      className={"w-full px-3 py-2 rounded-xl " + (!it.isRecurring ? "opacity-50" : "")}
+                      disabled={!it.isRecurring}
+                      value={it.nextDue || ""}
+                      onChange={e=>set("nextDue", e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="text-xs text-white/60 mt-2">
+                  Se attiva, salva anche <span className="font-semibold">Prossima scadenza</span> per ricordarti quando ricreare/registrare il pagamento.
+                </div>
+              </Field>
+            )}
+
+
             <Field label="Fornitore">
               <select className="w-full px-3 py-2 rounded-xl" value={it.supplierId || ""} onChange={e=>set("supplierId", e.target.value)}>
                 <option value="">—</option>
@@ -1458,7 +1596,18 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             </Field>
           )}
 
-          {kind !== "bill" && (
+          
+          {kind === "bill" && (
+            <Field label="Note">
+              <textarea
+                className="w-full px-3 py-2 rounded-xl min-h-[120px]"
+                value={it.notes || ""}
+                onChange={e=>set("notes", e.target.value)}
+                placeholder="Inserisci note (opzionale)..."
+              />
+            </Field>
+          )}
+{(kind === "accident" || kind === "maintenance" || kind === "bill") && (
             <div className="glass rounded-2xl p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="font-semibold">Allegati</div>
@@ -1473,12 +1622,13 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
                 </button>
                 <input 
                   id={'file-input-' + it.id}
-                  type="file" 
-                  accept="application/pdf,image/*" 
-                  className="hidden" 
+                  type="file"
+                  multiple
+                  accept="application/pdf,image/*"
+                  className="hidden"
                   onChange={(e)=> {
-                    const f = e.target.files?.[0];
-                    if (f) pickAttachment(f);
+                    const fs = Array.from(e.target.files || []);
+                    if (fs.length) pickAttachment(fs);
                     e.target.value = "";
                   }} 
                 />
@@ -2556,7 +2706,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
 
       // Attachments (Storage) — counts in list + viewer modal
-      const entityType = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : null;
+      const entityType = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : kind === "bill" ? "bills" : null;
       const [attachmentCounts, setAttachmentCounts] = useState({});
       const [attViewerOpen, setAttViewerOpen] = useState(false);
       const [attViewerItems, setAttViewerItems] = useState([]);
@@ -2704,6 +2854,15 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             { key:"amount", label:"Importo", render:(b)=> fmtEUR(b.amount) },
             { key:"paid", label:"Stato", render:(b)=> b.paid ? <Badge tone="good">Pagato</Badge> : (daysUntil(b.dueDate)<0 ? <Badge tone="bad">Scaduto</Badge> : <Badge tone="warn">Da pagare</Badge>) },
             { key:"supplierId", label:"Fornitore", render:(b)=> supplierById[b.supplierId]?.name || "" },
+            { key:"attachments", label:"PDF", render:(b)=> {
+              if (!entityType) return "—";
+              const cnt = attachmentCounts[b.id] || 0;
+              return cnt ? (
+                <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachmentsFor(b)} title="Apri allegati">
+                  <i className="fa-solid fa-paperclip mr-1"></i>{cnt}
+                </button>
+              ) : "—";
+            }},
             { key:"actions", label:"", render:(b)=> (
               <div className="flex gap-2 justify-end">
                 <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(b); setOpenForm(true);}}>Modifica</button>
