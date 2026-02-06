@@ -2553,6 +2553,71 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
       const items = kind === "accident" ? data.accidents : kind === "maintenance" ? data.maintenances : data.bills;
 
+
+      // Attachments (Storage) — counts in list + viewer modal
+      const entityType = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : null;
+      const [attachmentCounts, setAttachmentCounts] = useState({});
+      const [attViewerOpen, setAttViewerOpen] = useState(false);
+      const [attViewerItems, setAttViewerItems] = useState([]);
+      const [attViewerTitle, setAttViewerTitle] = useState("");
+
+      const idsKey = useMemo(() => {
+        if (!entityType) return "";
+        return (items || []).map(r => r.id).filter(Boolean).join(",");
+      }, [entityType, items]);
+
+      const refreshAttachmentCounts = async () => {
+        try {
+          if (!entityType) return;
+          const ids = (items || []).map(r => r.id).filter(Boolean);
+          if (!ids.length) { setAttachmentCounts({}); return; }
+          const res = await supabase
+            .from("attachments")
+            .select("entity_id")
+            .eq("entity_type", entityType)
+            .in("entity_id", ids);
+
+          if (res.error) throw res.error;
+          const map = {};
+          (res.data || []).forEach(r => {
+            const k = r.entity_id;
+            map[k] = (map[k] || 0) + 1;
+          });
+          setAttachmentCounts(map);
+        } catch (e) {
+          // non bloccare la UI
+          console.warn("Attachment counts error", e);
+        }
+      };
+
+      useEffect(() => { refreshAttachmentCounts(); }, [idsKey, entityType]);
+
+      const openAttachmentsFor = async (row) => {
+        try {
+          if (!entityType || !row?.id) return;
+          const list = await listAttachments({ entityType, entityId: row.id });
+          setAttViewerItems(list);
+          setAttViewerTitle(`${titleMap.title} — ${row.plate || ""}`.trim());
+          setAttViewerOpen(true);
+        } catch (e) {
+          toast("Errore apertura allegati", "warn");
+          console.error(e);
+        }
+      };
+
+      const openAllAttachments = async () => {
+        try {
+          for (const att of attViewerItems) {
+            const url = await getAttachmentSignedUrl(att.file_path);
+            window.open(url, "_blank");
+          }
+        } catch (e) {
+          toast("Errore apertura allegati", "warn");
+          console.error(e);
+        }
+      };
+
+
       const plates = useMemo(() => data.vehicles.map(v=>v.plate).sort(), [data.vehicles]);
 
       const filtered = useMemo(() => {
@@ -2652,18 +2717,14 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             { key:"cost", label:"Costo", render:(a)=> fmtEUR(a.cost) },
             { key:"reimbursement", label:"Rimborso", render:(a)=> fmtEUR(a.insuranceReimbursement) },
             { key:"attachments", label:"PDF", render:(a)=> {
-              const atts = (a.attachments && a.attachments.length) ? a.attachments
-                : (a.attachmentName && a.attachmentData ? [{ id:"legacy", name:a.attachmentName, data:a.attachmentData }] : []);
-              return atts.length ? (
-                <div className="flex flex-wrap gap-1">
-                  {atts.map(att => (
-                    <button key={att.id} className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachment(att.data)} title={att.name}>
-                      <i className="fa-solid fa-file-pdf mr-1"></i>{att.name && att.name.length > 16 ? att.name.substring(0,13)+'...' : (att.name || 'PDF')}
-                    </button>
-                  ))}
-                </div>
-              ) : '—';
-            } },
+              if (!entityType) return "—";
+              const cnt = attachmentCounts[a.id] || 0;
+              return cnt ? (
+                <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openAttachmentsFor(a)} title="Apri allegati">
+                  <i className="fa-solid fa-paperclip mr-1"></i>{cnt}
+                </button>
+              ) : "—";
+            }},
             { key:"actions", label:"", render:(a)=> (
               <div className="flex gap-2 justify-end">
                 <button className="btn rounded-xl px-3 py-2 text-xs" onClick={()=>{setEditing(a); setOpenForm(true);}}>Modifica</button>
@@ -2746,6 +2807,38 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
           <Modal open={openForm} title={(editing ? "Modifica" : "Nuovo") + " — " + titleMap.title} onClose={()=>{setOpenForm(false); setEditing(null);}}>
             <GenericItemForm kind={kind} vehicles={data.vehicles} suppliers={data.suppliers} initial={editing} onSave={saveItem} onCancel={()=>{setOpenForm(false); setEditing(null);}} />
+          </Modal>
+
+          <Modal open={attViewerOpen} title={attViewerTitle || "Allegati"} onClose={()=>setAttViewerOpen(false)}>
+            <div className="space-y-3">
+              {attViewerItems.length ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-white/80">{attViewerItems.length} allegati</div>
+                    <button className="btn px-3 py-2" onClick={openAllAttachments}>
+                      <i className="fa-solid fa-up-right-from-square mr-2"></i>Apri tutti
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {attViewerItems.map(att => (
+                      <div key={att.id} className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <i className="fa-solid fa-paperclip text-white/70"></i>
+                          <div className="truncate" title={att.file_name}>{att.file_name}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button className="btn px-3 py-2" onClick={async()=>{ const url = await getAttachmentSignedUrl(att.file_path); window.open(url, "_blank"); }}>
+                            <i className="fa-solid fa-up-right-from-square"></i>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm text-white/70">Nessun allegato.</div>
+              )}
+            </div>
           </Modal>
         </div>
       );
