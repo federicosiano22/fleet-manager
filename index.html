@@ -1217,6 +1217,58 @@ const excelSerialToISO = (v) => {
               <div className="text-sm text-white/60">Nessun periodo configurato.</div>
             )}
           </div>
+          {/* CDC */}
+          <div className="glass rounded-2xl p-4 mt-4">
+            <div className="font-semibold mb-2">CDC</div>
+            {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+
+            {!vehicle?.id ? (
+              <div className="text-sm text-white/70">Salva il veicolo per poter caricare il CDC.</div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm text-white/70">Carica il CDC (Certificato di Conformità) del veicolo e aprilo quando serve.</div>
+                  <label className="btn rounded-lg px-2 py-1 text-sm cursor-pointer">
+                    <input
+                      type="file"
+                      accept=".pdf,image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) uploadVehDoc("cdc", f);
+                        e.target.value = "";
+                      }}
+                      disabled={vehDocsBusy}
+                    />
+                    + Aggiungi CDC
+                  </label>
+                </div>
+
+                {vehDocsBusy ? <div className="text-sm text-white/60">Operazione in corso…</div> : null}
+
+                {vehDocs?.cdc?.length ? (
+                  <div className="space-y-2">
+                    {vehDocs.cdc.map((d) => (
+                      <div key={d.id} className="flex items-center justify-between gap-3 glass2 rounded-xl px-3 py-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{d.file_name || d.original_name || "CDC"}</div>
+                          <div className="text-xs text-white/60 truncate">{d.created_at ? new Date(d.created_at).toLocaleString() : ""}</div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button className="btn2 text-sm" onClick={() => openVehDoc(d)}>Apri</button>
+                          <button className="btn2 text-sm" onClick={() => deleteVehDoc(d)}>Elimina</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-white/60">Nessun CDC caricato.</div>
+                )}
+              </>
+            )}
+          </div>
+
+
 
           <Field label="Note">
             <textarea className="w-full px-3 py-2 rounded-xl min-h-[90px]" value={v.notes} onChange={e => set("notes", e.target.value)} />
@@ -2267,10 +2319,7 @@ return (
                 </div>
               </div>
 
-              {/* CDC */}
-              <div className="glass rounded-2xl p-4">
-                <div className="font-semibold mb-2">CDC</div>
-                {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+              : null}
 
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-sm text-white/70">Carica il CDC (Certificato di Conformità) del veicolo e aprilo quando serve.</div>
@@ -3532,30 +3581,31 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
         }
       };
 useEffect(() => {
+  // Lightweight refresh strategy (no Realtime subscriptions):
+  // - refresh when tab becomes visible
+  // - refresh periodically while visible (every 120s)
   if (!session) return;
-  if (!ENABLE_REALTIME) return;
 
-  let channel;
-  try {
-    channel = supabase
+  let timer = null;
 
-    .channel("fleet-realtime")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "*" },
-      async () => {
-        if (applyingRemoteRef.current) return;
-        await safeFetchAll();
-      }
-    )
-    .subscribe();
-  } catch (e) {
-    console.warn("Realtime connection unavailable:", e);
-    return;
-  }
+  const refreshIfVisible = async () => {
+    if (document.hidden) return;
+    if (applyingRemoteRef.current) return;
+    await safeFetchAll();
+  };
+
+  const onVisibility = () => { refreshIfVisible(); };
+
+  document.addEventListener("visibilitychange", onVisibility);
+
+  timer = setInterval(() => { refreshIfVisible(); }, 120000);
+
+  // initial
+  refreshIfVisible();
 
   return () => {
-    try { if (channel) supabase.removeChannel(channel); } catch (e) {}
+    document.removeEventListener("visibilitychange", onVisibility);
+    if (timer) clearInterval(timer);
   };
 }, [session]);
 
