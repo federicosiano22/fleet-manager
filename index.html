@@ -160,7 +160,7 @@ async function pushAllToDB(appData) {
       group: v.group || "",
       vin: v.vin || "",
       km: v.km || null,
-      kw: (v.kw === '' || v.kw === null || typeof v.kw === 'undefined') ? null : Number(v.kw),
+      kw: parseNum(v.kw),
       purchase_type: v.purchase_type || v.purchaseType || v.purchase_type || "",
       purchase_cost: (v.purchase_cost || v.purchaseCost) ? parseNum(v.purchase_cost || v.purchaseCost) : null,
       buyback_cost: (v.buyback_cost || v.buybackCost) ? parseNum(v.buyback_cost || v.buybackCost) : null,
@@ -2466,7 +2466,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           if (existing) return existing.id;
           // create
           const created = { id: uid(), name: n, type: String(type||"").trim(), phone:"", email:"", notes:"" };
-          setData(prev => ({...prev, suppliers: [...prev.suppliers, created]}));
+          setData(prev => {
+    const newData = {...prev, suppliers: [...prev.suppliers, created]};
+    saveStore(newData);
+    return newData;
+  });
           return created.id;
         };
 
@@ -2863,12 +2867,15 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
           return;
         }
         setData(prev => {
+
           const idx = prev.vehicles.findIndex(v => v.id === veh.id);
           const next = idx >= 0
             ? prev.vehicles.map(v => v.id === veh.id ? veh : v)
             : [...prev.vehicles, veh];
-          return { ...prev, vehicles: next };
-        });
+          const newData = { ...prev, vehicles: next };
+    saveStore(newData);
+    return newData;
+  });
         setOpenForm(false);
         setEditing(null);
 
@@ -2886,11 +2893,15 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         if (!confirm("Eliminare il veicolo " + (v?.plate || "") + "?")) return;
         // optimistic remove
         const row = v || data.vehicles.find(x => x.id === id) || {};
-        setData(prev => ({
+        setData(prev => {
+    const newData = {
           ...prev,
           vehicles: prev.vehicles.filter(x => x.id !== id),
           // keep related items for safety
-        }));
+        };
+    saveStore(newData);
+    return newData;
+  });
         try {
           await deleteRowFromDB("vehicles", row);
           toast("Veicolo eliminato.");
@@ -3116,9 +3127,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
         // optimistic remove
         setData(prev => {
+
           const key = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
-          return { ...prev, [key]: prev[key].filter(x => x.id !== id) };
-        });
+          const newData = { ...prev, [key]: prev[key].filter(x => x.id !== id) };
+    saveStore(newData);
+    return newData;
+  });
 
         try {
           await deleteRowFromDB(table, row);
@@ -3312,10 +3326,13 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
       const save = async (s) => {
         setData(prev => {
+
           const idx = prev.suppliers.findIndex(x => x.id === s.id);
           const next = idx >= 0 ? prev.suppliers.map(x => x.id === s.id ? s : x) : [...prev.suppliers, s];
-          return { ...prev, suppliers: next };
-        });
+          const newData = { ...prev, suppliers: next };
+    saveStore(newData);
+    return newData;
+  });
         setOpenForm(false);
         setEditing(null);
 
@@ -3332,7 +3349,11 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         const s = data.suppliers.find(x => x.id === id);
         if (!confirm("Eliminare fornitore " + (s?.name || "") + "?")) return;
         // optimistic remove
-        setData(prev => ({...prev, suppliers: prev.suppliers.filter(x => x.id !== id)}));
+        setData(prev => {
+    const newData = {...prev, suppliers: prev.suppliers.filter(x => x.id !== id)};
+    saveStore(newData);
+    return newData;
+  });
         try {
           await deleteRowFromDB("suppliers", s);
           toast("Fornitore eliminato.");
