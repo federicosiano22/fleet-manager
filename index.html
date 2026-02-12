@@ -2639,7 +2639,39 @@ return (
                       </div>
                     ) : <div className="text-sm text-white/60">Nessun contratto caricato.</div>
                   )}
+                
+              {/* Sezione CDC */}
+              <div className="glass rounded-2xl p-4">
+                <div className="font-semibold mb-2">CDC</div>
+                {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm text-white/70">Allega il CDC del veicolo e aprilo quando serve.</div>
+                  <label className="btn rounded-lg px-2 py-1 text-xs cursor-pointer">
+                    <i className="fa-solid fa-paperclip mr-1"></i>Carica
+                    <input type="file" multiple className="hidden" onChange={(e)=>uploadVehDocs("cdc", e.target.files)} />
+                  </label>
                 </div>
+
+                {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
+                  vehDocs.cdc?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {vehDocs.cdc.map(att => (
+                        <div key={att.id} className="flex items-center gap-1">
+                          <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openVehAttachment(att)} title="Apri">
+                            <i className="fa-solid fa-file mr-1"></i>{att.file_name?.length>18? att.file_name.slice(0,15)+'...': att.file_name}
+                          </button>
+                          <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>deleteVehAttachment(att)} title="Elimina">
+                            <i className="fa-solid fa-trash"></i>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="text-sm text-white/60">Nessun CDC caricato.</div>
+                )}
+              </div>
+
+</div>
               </div>
 
               {vehicle.notes ? (
