@@ -1769,7 +1769,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const [vehMetaErr, setVehMetaErr] = useState("");
 
       // --- Vehicle documents ---
-      const [vehDocs, setVehDocs] = useState({ purchase: [], sale: [], contract: [] });
+      const [vehDocs, setVehDocs] = useState({ purchase: [], sale: [], contract: [], cdc: [] });
       const [vehDocsBusy, setVehDocsBusy] = useState(false);
       const [vehDocsErr, setVehDocsErr] = useState("");
 
@@ -1792,11 +1792,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
             if (res.error) throw res.error;
 
             const docs = res.data || [];
-            const byType = { purchase: [], sale: [], contract: [] };
+            const byType = { purchase: [], sale: [], contract: [], cdc: [] };
             docs.forEach(d => {
               if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
               else if (d.doc_type === "sale_invoice") byType.sale.push(d);
               else if (d.doc_type === "contract") byType.contract.push(d);
+              else if (d.doc_type === "cdc") byType.cdc.push(d);
             });
 
             if (!cancelled) setVehDocs(byType);
@@ -1848,11 +1849,12 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
         if (res.error) throw res.error;
 
         const docs = res.data || [];
-        const byType = { purchase: [], sale: [], contract: [] };
+        const byType = { purchase: [], sale: [], contract: [], cdc: [] };
         docs.forEach(d => {
           if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
           else if (d.doc_type === "sale_invoice") byType.sale.push(d);
           else if (d.doc_type === "contract") byType.contract.push(d);
+              else if (d.doc_type === "cdc") byType.cdc.push(d);
         });
         setVehDocs(byType);
       }, [vehicle]);
@@ -2264,6 +2266,38 @@ return (
                   )}
                 </div>
               </div>
+
+              {/* CDC */}
+              <div className="glass rounded-2xl p-4">
+                <div className="font-semibold mb-2">CDC</div>
+                {vehDocsErr ? <div className="text-sm text-red-300 mb-2">{vehDocsErr}</div> : null}
+
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm text-white/70">Carica il CDC (Certificato di Conformità) del veicolo e aprilo quando serve.</div>
+                  <label className="btn rounded-lg px-2 py-1 text-xs cursor-pointer">
+                    <i className="fa-solid fa-paperclip mr-1"></i>Carica
+                    <input type="file" className="hidden" accept="application/pdf,image/*" onChange={(e)=>uploadVehDocs("cdc", e.target.files)} />
+                  </label>
+                </div>
+
+                {vehDocsBusy ? <div className="text-sm text-white/60">...</div> : (
+                  vehDocs.cdc?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {vehDocs.cdc.map(att => (
+                        <div key={att.id} className="flex items-center gap-1">
+                          <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>openVehAttachment(att)} title="Apri">
+                            <i className="fa-solid fa-file-lines mr-1"></i>{att.file_name?.length>18? att.file_name.slice(0,15)+'...': att.file_name}
+                          </button>
+                          <button className="btn rounded-lg px-2 py-1 text-xs" onClick={()=>deleteVehAttachment(att)} title="Elimina">
+                            <i className="fa-solid fa-trash"></i>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="text-sm text-white/60">Nessun CDC caricato.</div>
+                )}
+              </div>
+
 
               {vehicle.notes ? (
                 <div className="glass rounded-2xl p-4">
