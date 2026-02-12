@@ -1773,125 +1773,127 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
       const [vehDocsBusy, setVehDocsBusy] = useState(false);
       const [vehDocsErr, setVehDocsErr] = useState("");
 
-      // Load vehicle documents
+      // Load vehicle documents (via supabase-js session)
       useEffect(() => {
         if (!vehicle) return;
-        setVehDocsBusy(true);
-        setVehDocsErr("");
-        fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-          headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
-        })
-        .then(async r => {
-          if (r.status === 404) return [];
-          if (r.ok) return r.json();
-          const t = await r.text().catch(() => "");
-          throw new Error((t || r.statusText || "Request failed") + " (HTTP " + r.status + ")");
-        })
-        .then(docs => {
-          const byType = { purchase: [], sale: [], contract: [] };
-          docs.forEach(d => {
-            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
-            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
-            else if (d.doc_type === "contract") byType.contract.push(d);
-          });
-          setVehDocs(byType);
-        })
-        .catch(e => setVehDocsErr(String(e)))
-        .finally(() => setVehDocsBusy(false));
+        let cancelled = false;
+        (async () => {
+          setVehDocsBusy(true);
+          setVehDocsErr("");
+          try {
+            await requireSession();
+
+            const res = await supabase
+              .from("vehicle_docs")
+              .select("*")
+              .eq("vehicle_id", vehicle.id)
+              .order("created_at", { ascending: false });
+
+            if (res.error) throw res.error;
+
+            const docs = res.data || [];
+            const byType = { purchase: [], sale: [], contract: [] };
+            docs.forEach(d => {
+              if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
+              else if (d.doc_type === "sale_invoice") byType.sale.push(d);
+              else if (d.doc_type === "contract") byType.contract.push(d);
+            });
+
+            if (!cancelled) setVehDocs(byType);
+          } catch (e) {
+            if (!cancelled) setVehDocsErr(String(e?.message || e));
+          } finally {
+            if (!cancelled) setVehDocsBusy(false);
+          }
+        })();
+        return () => { cancelled = true; };
       }, [vehicle]);
+
+      // Save "Dati auto" in vehicles table (kw, purchase_* ...)
       const saveVehMeta = React.useCallback(async () => {
         if (!vehicle) return;
         setVehMetaBusy(true);
         setVehMetaErr("");
         try {
-          const res = await fetch(SUPABASE_URL + "/rest/v1/vehicles?id=eq." + vehicle.id, {
-            method: "PATCH",
-            headers: {
-              "apikey": SUPABASE_ANON_KEY,
-              "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-              "Content-Type": "application/json",
-              "Prefer": "return=minimal"
-            },
-            body: JSON.stringify({
-              kw: vehMeta.kw || null,
+          await requireSession();
+
+          const upd = await supabase
+            .from("vehicles")
+            .update({
+              kw: vehMeta.kw !== "" ? parseNum(vehMeta.kw) : null,
               purchase_type: vehMeta.purchaseType || null,
-              purchase_cost: vehMeta.purchaseCost || null,
-              buyback_cost: vehMeta.buybackCost || null,
-              rtr_fee: vehMeta.rtrFee || null,
-              holding_cost: vehMeta.holdingCost || null
+              purchase_cost: vehMeta.purchaseCost !== "" ? parseNum(vehMeta.purchaseCost) : null,
+              buyback_cost: vehMeta.buybackCost !== "" ? parseNum(vehMeta.buybackCost) : null,
+              rtr_fee: vehMeta.rtrFee !== "" ? parseNum(vehMeta.rtrFee) : null,
+              holding_cost: vehMeta.holdingCost !== "" ? parseNum(vehMeta.holdingCost) : null
             })
-          });
-          if (!res.ok) throw new Error(res.statusText);
+            .eq("id", vehicle.id);
+
+          if (upd.error) throw upd.error;
         } catch (e) {
-          setVehMetaErr(String(e));
+          setVehMetaErr(String(e?.message || e));
         } finally {
           setVehMetaBusy(false);
         }
       }, [vehicle, vehMeta]);
+
+      const reloadVehDocs = React.useCallback(async () => {
+        if (!vehicle) return;
+        const res = await supabase
+          .from("vehicle_docs")
+          .select("*")
+          .eq("vehicle_id", vehicle.id)
+          .order("created_at", { ascending: false });
+
+        if (res.error) throw res.error;
+
+        const docs = res.data || [];
+        const byType = { purchase: [], sale: [], contract: [] };
+        docs.forEach(d => {
+          if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
+          else if (d.doc_type === "sale_invoice") byType.sale.push(d);
+          else if (d.doc_type === "contract") byType.contract.push(d);
+        });
+        setVehDocs(byType);
+      }, [vehicle]);
 
       const uploadVehDocs = async (docType, files) => {
         if (!vehicle || !files || !files.length) return;
         setVehDocsBusy(true);
         setVehDocsErr("");
         try {
+          await requireSession();
+
           for (const file of Array.from(files)) {
-            const fileName = Date.now() + "_" + file.name;
+            const fileName = `${Date.now()}_${safeFileName(file.name)}`;
             const storagePath = `vehicle_docs/${vehicle.id}/${fileName}`;
-            
-            // Upload file to storage
-            // NOTE: requires Storage bucket + policy that allows INSERT for anon/auth users.
-            const safePath = storagePath.split("/").map(encodeURIComponent).join("/");
-            const uploadUrl = SUPABASE_URL + "/storage/v1/object/" + STORAGE_BUCKET + "/" + safePath;
 
-            const uploadRes = await fetch(uploadUrl, {
-              method: "POST",
-              headers: {
-                "apikey": SUPABASE_ANON_KEY,
-                "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-                "x-upsert": "true",
-                "Content-Type": file.type || "application/octet-stream"
-              },
-              body: file
+            // Upload to Storage (authenticated session)
+            const up = await supabase.storage.from(STORAGE_BUCKET).upload(storagePath, file, {
+              cacheControl: "3600",
+              upsert: true,
+              contentType: file?.type || "application/octet-stream",
             });
+            if (up.error) throw up.error;
 
-            const uploadBody = await uploadRes.text().catch(() => "");
-            if (!uploadRes.ok) {
-              throw new Error("Upload failed (HTTP " + uploadRes.status + "): " + (uploadBody || uploadRes.statusText));
-            }
-
-            // Create database record
-            const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs", {
-              method: "POST",
-              headers: {
-                "apikey": SUPABASE_ANON_KEY,
-                "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal"
-              },
-              body: JSON.stringify({
+            // Insert DB record
+            const ins = await supabase
+              .from("vehicle_docs")
+              .insert([{
                 vehicle_id: vehicle.id,
                 doc_type: docType,
                 file_name: file.name,
-                storage_path: storagePath
-              })
-            });
-            if (!dbRes.ok) throw new Error("DB insert failed: " + dbRes.statusText);
+                storage_path: storagePath,
+                original_name: file.name,
+                size: file.size || null,
+                mime_type: file.type || null
+              }]);
+            if (ins.error) throw ins.error;
           }
-          
-          // Reload docs
-          const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
-          }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
-          
-          const byType = { purchase: [], sale: [], contract: [] };
-          docs.forEach(d => {
-            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
-            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
-            else if (d.doc_type === "contract") byType.contract.push(d);
-          });
-          setVehDocs(byType);
+
+          await reloadVehDocs();
         } catch (e) {
-          setVehDocsErr(String(e));
+          setVehDocsErr(String(e?.message || e));
         } finally {
           setVehDocsBusy(false);
         }
@@ -1899,58 +1901,44 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
 
       const openVehAttachment = async (doc) => {
         try {
-          const url = SUPABASE_URL + "/storage/v1/object/public/fleet-manager/" + doc.storage_path;
-          window.open(url, "_blank");
+          await requireSession();
+          if (!doc?.storage_path) throw new Error("File non disponibile.");
+
+          // Bucket is private: use signed URL
+          const res = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(doc.storage_path, 120);
+          if (res.error) throw res.error;
+
+          window.open(res.data.signedUrl, "_blank");
         } catch (e) {
-          setVehDocsErr(String(e));
+          setVehDocsErr(String(e?.message || e));
         }
       };
 
       const deleteVehAttachment = async (doc) => {
-        if (!confirm("Eliminare " + doc.file_name + "?")) return;
+        if (!confirm("Eliminare " + (doc?.file_name || "allegato") + "?")) return;
         setVehDocsBusy(true);
         setVehDocsErr("");
         try {
-          // Delete from database
-          const dbRes = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?id=eq." + doc.id, {
-            method: "DELETE",
-            headers: {
-              "apikey": SUPABASE_ANON_KEY,
-              "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-              "Prefer": "return=minimal"
-            }
-          });
-          if (!dbRes.ok) throw new Error("DB delete failed: " + dbRes.statusText);
-          
-          // Delete from storage
-          await fetch(SUPABASE_URL + "/storage/v1/object/fleet-manager/" + doc.storage_path, {
-            method: "DELETE",
-            headers: {
-              "apikey": SUPABASE_ANON_KEY,
-              "Authorization": "Bearer " + SUPABASE_ANON_KEY
-            }
-          });
-          
-          // Reload docs
-          const docs = await fetch(SUPABASE_URL + "/rest/v1/vehicle_docs?vehicle_id=eq." + vehicle.id + "&select=*", {
-            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }
-          }).then(r => r.ok ? r.json() : Promise.reject(r.statusText));
-          
-          const byType = { purchase: [], sale: [], contract: [] };
-          docs.forEach(d => {
-            if (d.doc_type === "purchase_invoice") byType.purchase.push(d);
-            else if (d.doc_type === "sale_invoice") byType.sale.push(d);
-            else if (d.doc_type === "contract") byType.contract.push(d);
-          });
-          setVehDocs(byType);
+          await requireSession();
+
+          // Delete DB row first
+          const db = await supabase.from("vehicle_docs").delete().eq("id", doc.id);
+          if (db.error) throw db.error;
+
+          // Delete from Storage (ignore if missing)
+          if (doc?.storage_path) {
+            const del = await supabase.storage.from(STORAGE_BUCKET).remove([doc.storage_path]);
+            if (del.error) throw del.error;
+          }
+
+          await reloadVehDocs();
         } catch (e) {
-          setVehDocsErr(String(e));
+          setVehDocsErr(String(e?.message || e));
         } finally {
           setVehDocsBusy(false);
         }
       };
-
-      return (
+return (
         <Modal open={!!plate} wide title={"Riepilogo — " + plate} onClose={onClose}>
           {!vehicle ? (
             <div className="text-white/70">Veicolo non trovato.</div>
