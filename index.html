@@ -7,22 +7,22 @@
 
   <!--
   ================================================================================
-  VERSIONE CORRETTA - Bug Fix v3.7.1
+  VERSIONE CORRETTA - Bug Fix v3.7.2
   ================================================================================
   Correzioni applicate:
   
-  1. ✅ Rimossa costante STORAGE_BUCKET non utilizzata
-  2. ✅ Rimossa costante ENABLE_REALTIME (feature non implementata)
-  3. ✅ Aumentato timeout signed URL da 2 a 10 minuti
-  4. ✅ Aggiunta helper function parseNumOrNull per gestione valori numerici null
-  5. ✅ Corretta funzione pushAllToDB con UUID_RE.test invece di isUUID() non definita
-  6. ✅ Rimossa duplicazione logica in purchase_type (era ripetuto 2 volte)
-  7. ✅ Semplificata logica campi numerici (purchase_cost, buyback_cost, rtr_fee, holding_cost)
-  8. ✅ Sostituiti tutti gli alert() con toast() per UX consistente
-  9. ✅ Migliorata gestione errori con setCdcErr e setInvErr
-  10. ✅ Aggiunta icona sync al pulsante "Sync DB"
-  11. ✅ Aggiunto feedback "Sincronizzazione in corso..." durante sync DB
-  12. ✅ [HOTFIX] Aggiunta funzione fmtDate mancante (causava crash form veicoli)
+  1. ✅ Rimossa costante ENABLE_REALTIME (feature non implementata)
+  2. ✅ Aumentato timeout signed URL da 2 a 10 minuti (attachments)
+  3. ✅ Aggiunta helper function parseNumOrNull per gestione valori numerici null
+  4. ✅ Corretta funzione pushAllToDB con UUID_RE.test invece di isUUID() non definita
+  5. ✅ Rimossa duplicazione logica in purchase_type (era ripetuto 2 volte)
+  6. ✅ Semplificata logica campi numerici (purchase_cost, buyback_cost, rtr_fee, holding_cost)
+  7. ✅ Sostituiti tutti gli alert() con toast() per UX consistente
+  8. ✅ Migliorata gestione errori con setCdcErr e setInvErr
+  9. ✅ Aggiunta icona sync al pulsante "Sync DB"
+  10. ✅ Aggiunto feedback "Sincronizzazione in corso..." durante sync DB
+  11. ✅ [HOTFIX v3.7.1] Aggiunta funzione fmtDate mancante (causava crash form veicoli)
+  12. ✅ [HOTFIX v3.7.2] Ripristinata costante STORAGE_BUCKET necessaria per CDC/fatture/contratti
   
   Nessuna funzionalità esistente è stata alterata. 
   Tutte le correzioni sono retrocompatibili.
@@ -72,6 +72,7 @@ const { useEffect, useMemo, useRef, useState } = React;
     // =====================
     const SUPABASE_URL = "https://pajdgababkkxgmfxzazq.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhamRnYWJhYmtreGdtZnh6YXpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyOTMyNjEsImV4cCI6MjA4NTg2OTI2MX0.0PZBJl7XZpwsx3yHupMKPR2BDMKgT9CXwGiIUMw0gWU";
+    const STORAGE_BUCKET = "fleet-manager"; // Bucket per documenti veicoli (CDC, fatture, contratti)
 
     console.log("SUPABASE_URL =", SUPABASE_URL);
     const supabase = window.supabase.createClient(
@@ -4119,7 +4120,7 @@ useEffect(() => {
                 </div>
                 <div>
                   <div className="font-bold text-lg">Fleet Manager</div>
-                  <div className="text-xs text-white/55">Pro v3.7.1 — Bug Fix Release</div>
+                  <div className="text-xs text-white/55">Pro v3.7.2 — Bug Fix Release (Stable)</div>
                 </div>
               </div>
             </div>
