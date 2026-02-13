@@ -7,7 +7,7 @@
 
   <!--
   ================================================================================
-  VERSIONE CORRETTA - Bug Fix v3.7
+  VERSIONE CORRETTA - Bug Fix v3.7.1
   ================================================================================
   Correzioni applicate:
   
@@ -22,6 +22,7 @@
   9. ✅ Migliorata gestione errori con setCdcErr e setInvErr
   10. ✅ Aggiunta icona sync al pulsante "Sync DB"
   11. ✅ Aggiunto feedback "Sincronizzazione in corso..." durante sync DB
+  12. ✅ [HOTFIX] Aggiunta funzione fmtDate mancante (causava crash form veicoli)
   
   Nessuna funzionalità esistente è stata alterata. 
   Tutte le correzioni sono retrocompatibili.
@@ -707,6 +708,23 @@ const excelSerialToISO = (v) => {
       const x = Number(n);
       if (!Number.isFinite(x)) return "-";
       return x.toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+    };
+
+    const fmtDate = (dateStr) => {
+      if (!dateStr) return "-";
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return "-";
+        return d.toLocaleDateString("it-IT", { 
+          year: "numeric", 
+          month: "2-digit", 
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit"
+        });
+      } catch {
+        return "-";
+      }
     };
 
     const daysUntil = (iso) => {
@@ -4101,7 +4119,7 @@ useEffect(() => {
                 </div>
                 <div>
                   <div className="font-bold text-lg">Fleet Manager</div>
-                  <div className="text-xs text-white/55">Pro v3.7 — Bug Fix Release</div>
+                  <div className="text-xs text-white/55">Pro v3.7.1 — Bug Fix Release</div>
                 </div>
               </div>
             </div>
