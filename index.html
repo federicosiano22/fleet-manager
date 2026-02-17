@@ -448,18 +448,41 @@ async function getSession() {
   return session;
 }
 
+
+async function fetchAllRowsRaw(table, orderCol = "id", asc = true) {
+  const pageSize = 1000;
+  let from = 0;
+  let all = [];
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .order(orderCol, { ascending: asc })
+      .range(from, to);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 async function fetchAllFromDB() {
-  const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
-    supabase.from("vehicles").select("*"),
-    supabase.from("suppliers").select("*"),
-    supabase.from("accidents").select("*"),
-    supabase.from("maintenances").select("*"),
-    supabase.from("bills").select("*"),
+  const [vehiclesData, suppliersData, accidentsData, maintenancesData, billsData] = await Promise.all([
+    fetchAllRowsRaw("vehicles", "plate", true),
+    fetchAllRowsRaw("suppliers", "id", true),
+    fetchAllRowsRaw("accidents", "id", true),
+    fetchAllRowsRaw("maintenances", "id", true),
+    fetchAllRowsRaw("bills", "id", true),
   ]);
 
-  for (const r of [vehicles, suppliers, accidents, maintenances, bills]) {
-    if (r.error) throw r.error;
-  }
+  const vehicles = { data: vehiclesData };
+  const suppliers = { data: suppliersData };
+  const accidents = { data: accidentsData };
+  const maintenances = { data: maintenancesData };
+  const bills = { data: billsData };
 
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
   const toISO = (v) => {
@@ -535,6 +558,7 @@ async function fetchAllFromDB() {
     bills: billsNorm,
   };
 }
+
 
     // ---------- Utils ----------
     const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36));
@@ -1677,56 +1701,6 @@ const deleteInvoice = async (doc) => {
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-            {/* ═══════════════════════════════════════════════════════════
-                FLEET SYNC CARD — import CSV gestionale (solo veicoli)
-            ═══════════════════════════════════════════════════════════ */}
-            <div className="glass rounded-2xl p-4 space-y-3 border-2 border-sky-500/40 md:col-span-2">
-              <div className="flex items-center gap-2">
-                <i className="fa-solid fa-rotate text-sky-400 text-lg"></i>
-                <div className="font-semibold text-sky-100">Carica CSV gestionale (Veicoli)</div>
-                <Badge tone="info">Solo Vehicles</Badge>
-              </div>
-              <div className="text-sm text-white/70 space-y-1">
-                <p>Carica il CSV esportato dal gestionale. Il sistema <strong className="text-white">aggiorna solo i veicoli</strong> (targa, telaio, marca, modello, tipo, inizio/fine disponibilità).</p>
-                <ul className="list-disc list-inside text-white/60 text-xs space-y-0.5 ml-2">
-                  <li><span className="text-sky-300 font-semibold">Aggiorna</span> i veicoli esistenti senza toccare sinistri, manutenzioni, fatture, allegati.</li>
-                  <li><span className="text-emerald-300 font-semibold">Aggiunge</span> automaticamente i veicoli nuovi trovati nel file.</li>
-                  <li>Non elimina mai veicoli non presenti nel CSV.</li>
-                </ul>
-                <p className="text-xs text-white/50 mt-1">
-                  <i className="fa-solid fa-table-columns mr-1"></i>
-                  Colonne accettate: <code className="text-sky-300">Targa · Telaio · Marca/Brand · Modello · Tipo/Tipologia · Inizio disponibilita · Fine disponibilita</code>
-                </p>
-              </div>
-              <div className="flex gap-3 flex-wrap items-center pt-1">
-                <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600/70 hover:bg-sky-500/90 border border-sky-300/30 cursor-pointer select-none font-semibold text-sm transition-colors">
-                  <i className="fa-solid fa-upload"></i>
-                  <span>Carica CSV gestionale</span>
-                  <input
-                    ref={fleetSyncRef}
-                    type="file"
-                    accept=".csv,.txt"
-                    className="hidden"
-                    onChange={async (e) => {
-                      try {
-                        const f = e.target.files?.[0];
-                        if (f) await importFleetSync(f);
-                      } catch(err) {
-                        toast("❌ Errore import CSV gestionale: " + (err?.message || err));
-                        console.error("Fleet CSV import error:", err);
-                      } finally {
-                        e.target.value = "";
-                      }
-                    }}
-                  />
-                </label>
-                <span className="text-xs text-white/55">
-                  Supporta <code className="text-white/80">.csv</code> con separatore <code className="text-white/80">;</code> o <code className="text-white/80">,</code>
-                </span>
-              </div>
-            </div>
-
             <Field label="Nome *">
               <input className="w-full px-3 py-2 rounded-xl" value={s.name} onChange={e=>set("name", e.target.value)} />
             </Field>
@@ -3102,178 +3076,191 @@ return (
         toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
       };
 
+            const parseCSV = (text, delimiter = ";") => {
+        const rows = [];
+        let row = [];
+        let field = "";
+        let inQuotes = false;
 
-      // =====================================================================
-      // IMPORT CSV GESTIONALE — aggiorna SOLO la tabella Vehicles (veicoli)
-      // Colonne riconosciute automaticamente (separatore ; o ,):
-      //   Targa  → plate
-      //   Telaio → vin
-      //   Marca/Brand → brand
-      //   Modello → model
-      //   Tipo/Tipologia/Category → category
-      //   Inizio disponibilita → availabilityStart
-      //   Fine disponibilita   → availabilityEnd
-      // Logica:
-      //   - Targa esistente → aggiorna SOLO i campi sopra (NON tocca altro)
-      //   - Targa nuova → aggiunge un veicolo con campi base
-      //   - Non elimina mai veicoli non presenti nel CSV
-      // =====================================================================
-      const importFleetSync = async (file) => {
-        if (!file) return;
-        const text = await file.text();
-
-        // Detect delimiter: semicolon or comma
-        const firstLine = text.split(/\r?\n/)[0] || "";
-        const delim = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : ",";
-
-        const lines = text.split(/\r?\n/).filter(l => l.trim());
-        if (lines.length < 2) { toast("❌ File CSV vuoto o non valido."); return; }
-
-        const normalizeHeader = (h) =>
-          String(h || "")
-            .toLowerCase()
-            .trim()
-            .replace(/"/g, "")
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-            .replace(/\s+/g, "_");
-
-        const rawHeaders = lines[0].split(delim).map(h => h.replace(/^"|"$/g, "").trim());
-        const headers = rawHeaders.map(normalizeHeader);
-
-        const COL_MAP = {
-          "targa":                  "plate",
-          "plate":                  "plate",
-          "telaio":                 "vin",
-          "vin":                    "vin",
-          "marca":                  "brand",
-          "brand":                  "brand",
-          "modello":                "model",
-          "model":                  "model",
-          "tipo":                   "category",
-          "tipologia":              "category",
-          "categoria":              "category",
-          "category":               "category",
-          "inizio_disponibilita":   "availabilityStart",
-          "inizio_disponibilita_":  "availabilityStart",
-          "fine_disponibilita":     "availabilityEnd",
-          "data_inizio_disponibilita":"availabilityStart",
-          "data_fine_disponibilita":"availabilityEnd",
-          "inizio_disponibilita_da":"availabilityStart",
-          "fine_disponibilita_a":"availabilityEnd",
-          "disponibile_dal":"availabilityStart",
-          "disponibile_al":"availabilityEnd",
+        const pushField = () => {
+          // unescape double quotes
+          row.push(field.replace(/""/g, '"'));
+          field = "";
+        };
+        const pushRow = () => {
+          // avoid trailing empty row
+          if (row.length === 1 && row[0] === "" && rows.length === 0) { row = []; return; }
+          rows.push(row);
+          row = [];
         };
 
-        const getColIndex = (fieldName) => {
-          for (let i = 0; i < headers.length; i++) {
-            if (COL_MAP[headers[i]] === fieldName) return i;
+        for (let i = 0; i < text.length; i++) {
+          const c = text[i];
+
+          if (inQuotes) {
+            if (c === '"') {
+              const next = text[i + 1];
+              if (next === '"') { field += '"'; i++; }
+              else { inQuotes = false; }
+            } else {
+              field += c;
+            }
+            continue;
+          }
+
+          if (c === '"') { inQuotes = true; continue; }
+
+          if (c === delimiter) { pushField(); continue; }
+
+          if (c === "\n") {
+            pushField(); pushRow(); continue;
+          }
+          if (c === "\r") {
+            // ignore CR (will be handled by LF)
+            continue;
+          }
+          field += c;
+        }
+        // last field/row
+        pushField();
+        pushRow();
+        return rows;
+      };
+
+      const toISOFromDMY = (v) => {
+        if (v === null || v === undefined) return "";
+        const s = String(v).trim();
+        if (!s || /^n\.?d\.?$/i.test(s) || s === "-" ) return "";
+        const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) || s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
+        if (m) {
+          const dd = String(m[1]).padStart(2, "0");
+          const mm = String(m[2]).padStart(2, "0");
+          let yy = String(m[3]);
+          if (yy.length === 2) yy = "20" + yy;
+          return `${yy}-${mm}-${dd}`;
+        }
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+        return "";
+      };
+
+      const importGestionaleCSV = async (file) => {
+        if (!file) return;
+        const text = await readFileAsText(file);
+        // detect delimiter (fallback ;)
+        const firstLine = (text.split(/\r?\n/)[0] || "");
+        const delimiter = firstLine.includes(";") ? ";" : (firstLine.includes(",") ? "," : ";");
+        const rows = parseCSV(text, delimiter);
+        if (!rows || rows.length < 2) {
+          toast("⚠️ CSV vuoto o non valido.");
+          return;
+        }
+
+        const norm = (h) => String(h || "").replace(/^\uFEFF/, "").replace(/"/g, "").trim().toLowerCase();
+        const header = rows[0].map(norm);
+
+        const idx = (nameVariants) => {
+          for (const v of nameVariants) {
+            const i = header.indexOf(v);
+            if (i >= 0) return i;
           }
           return -1;
         };
 
-        const idxPlate = getColIndex("plate");
-        const idxVin   = getColIndex("vin");
-        const idxBrand = getColIndex("brand");
-        const idxModel = getColIndex("model");
-        const idxCat   = getColIndex("category");
-        const idxStart = getColIndex("availabilityStart");
-        const idxEnd   = getColIndex("availabilityEnd");
+        const iPlate = idx(["targa", "plate"]);
+        const iVin = idx(["telaio", "vin"]);
+        const iBrand = idx(["brand", "marca"]);
+        const iModel = idx(["modello", "model"]);
+        const iCat = idx(["tipologia", "category", "tipo"]);
+        const iStart = idx(["inizio disponibilita", "inizio disponibilità", "availability start", "availability_start"]);
+        const iEnd = idx(["fine disponibilita", "fine disponibilità", "availability end", "availability_end"]);
 
-        if (idxPlate === -1) {
-          toast('❌ Colonna "Targa" non trovata nel CSV. Verifica il file.');
+        if (iPlate < 0) {
+          toast("❌ Colonna 'Targa' non trovata nel CSV.");
           return;
         }
 
-        // Parse data rows (gestione virgolette)
-        const csvRows = [];
-        for (let i = 1; i < lines.length; i++) {
-          const cols = [];
-          let cur = "", inQ = false;
-          for (const ch of lines[i]) {
-            if (ch === '"') { inQ = !inQ; continue; }
-            if (ch === delim && !inQ) { cols.push(cur.trim()); cur = ""; continue; }
-            cur += ch;
-          }
-          cols.push(cur.trim());
+        const cutoff = "2024-01-01";
+        const incoming = [];
+        for (let r = 1; r < rows.length; r++) {
+          const row = rows[r];
+          if (!row || row.length === 0) continue;
 
-          const plate = normalizePlate(cols[idxPlate] || "");
+          const plateRaw = row[iPlate];
+          const plate = String(plateRaw || "").trim().toUpperCase();
           if (!plate) continue;
 
-          csvRows.push({
-            plate,
-            vin:               idxVin   >= 0 ? String(cols[idxVin]  || "").trim() : "",
-            brand:             idxBrand >= 0 ? String(cols[idxBrand]|| "").trim() : "",
-            model:             idxModel >= 0 ? String(cols[idxModel]|| "").trim() : "",
-            category:          idxCat   >= 0 ? String(cols[idxCat]  || "").trim() : "",
-            availabilityStart: idxStart >= 0 ? excelSerialToISO(cols[idxStart]) : "",
-            availabilityEnd:   idxEnd   >= 0 ? excelSerialToISO(cols[idxEnd])   : "",
-          });
+          const availabilityStart = iStart >= 0 ? toISOFromDMY(row[iStart]) : "";
+          // filtro richiesto: solo veicoli con inizio disponibilità >= 01/01/2024
+          if (!availabilityStart || availabilityStart < cutoff) continue;
+
+          const availabilityEnd = iEnd >= 0 ? toISOFromDMY(row[iEnd]) : "";
+          const vin = iVin >= 0 ? String(row[iVin] || "").trim() : "";
+          const brand = iBrand >= 0 ? String(row[iBrand] || "").trim() : "";
+          const model = iModel >= 0 ? String(row[iModel] || "").trim() : "";
+          const category = iCat >= 0 ? String(row[iCat] || "").trim() : "";
+
+          incoming.push({ plate, vin, brand, model, category, availabilityStart, availabilityEnd });
         }
 
-        if (!csvRows.length) { toast("❌ Nessun veicolo valido trovato nel CSV."); return; }
-
-        let updated = 0, added = 0;
+        if (incoming.length === 0) {
+          toast("⚠️ Nessun veicolo importato (filtro 01/01/2024 o righe incomplete).");
+          return;
+        }
 
         setData(prev => {
-          const existingMap = new Map(prev.vehicles.map(v => [normalizePlate(v.plate), v]));
-
-          const nextVehiclesFromCsv = csvRows.map(row => {
-            const existing = existingMap.get(row.plate);
+          const prevVehicles = Array.isArray(prev.vehicles) ? prev.vehicles : [];
+          const byPlate = new Map(prevVehicles.map(v => [String(v.plate || "").trim().toUpperCase(), v]));
+          for (const inc of incoming) {
+            const existing = byPlate.get(inc.plate);
             if (existing) {
-              updated++;
-              return {
+              byPlate.set(inc.plate, {
                 ...existing,
-                // aggiorna SOLO questi campi
-                vin:               row.vin               || existing.vin               || "",
-                brand:             row.brand             || existing.brand             || "",
-                model:             row.model             || existing.model             || "",
-                category:          row.category          || existing.category          || "",
-                availabilityStart: row.availabilityStart || existing.availabilityStart || "",
-                availabilityEnd:   row.availabilityEnd   || existing.availabilityEnd   || "",
-              };
+                plate: inc.plate,
+                vin: inc.vin || existing.vin || "",
+                brand: inc.brand || existing.brand || "",
+                model: inc.model || existing.model || "",
+                category: inc.category || existing.category || "",
+                availabilityStart: inc.availabilityStart || existing.availabilityStart || "",
+                availabilityEnd: inc.availabilityEnd || existing.availabilityEnd || "",
+              });
+
             } else {
-              added++;
-              return {
-                id:                uid(),
-                plate:             row.plate,
-                vin:               row.vin,
-                brand:             row.brand,
-                model:             row.model,
-                year:              "",
-                category:          row.category,
-                hub:               "",
-                group:             "",
-                km:                null,
-                availabilityStart: row.availabilityStart,
-                availabilityEnd:   row.availabilityEnd,
-                notes:             "",
-                periods:           [],
-                purchaseType:      "",
-                purchaseCost:      null,
-                buybackCost:       null,
-                rtrFee:            null,
-                holdingCost:       null,
-              };
+              byPlate.set(inc.plate, {
+                id: crypto.randomUUID(),
+                plate: inc.plate,
+                brand: inc.brand || "",
+                model: inc.model || "",
+                year: "",
+                category: inc.category || "",
+                hub: "",
+                group: "",
+                vin: inc.vin || "",
+                km: "",
+                availabilityStart: inc.availabilityStart || "",
+                availabilityEnd: inc.availabilityEnd || "",
+                notes: "",
+                periods: [],
+              });
+
             }
-          });
+          }
 
-          const csvPlates = new Set(csvRows.map(r => r.plate));
-          const untouchedVehicles = prev.vehicles.filter(v => !csvPlates.has(normalizePlate(v.plate)));
+          const mergedVehicles = Array.from(byPlate.values());
+          // Keep ordering stable-ish
+          mergedVehicles.sort((a,b)=>String(a.plate||"").localeCompare(String(b.plate||"")));
 
-          const merged = [...nextVehiclesFromCsv, ...untouchedVehicles];
-          const newData = { ...prev, vehicles: merged };
-          saveStore(newData);
-          return newData;
+          const next = { ...prev, vehicles: mergedVehicles };
+          return next;
         });
 
-        toast(`✅ Import CSV gestionale: ${updated} aggiornati, ${added} nuovi aggiunti.`);
+        toast(`✅ CSV gestionale importato: ${incoming.length} righe (solo inizio disponibilità ≥ 01/01/2024).`);
       };
-
 
       const jsonRef = useRef(null);
       const xlsxRef = useRef(null);
+      const csvGestionaleRef = useRef(null);
 
-      const fleetSyncRef = useRef(null);
       return (
         <div className="space-y-4">
           <DataBar>
@@ -3324,6 +3311,29 @@ return (
       }}}
     />
   </label>
+
+  <label className="btn rounded-xl px-4 py-2 inline-flex items-center gap-2 cursor-pointer select-none">
+    <i className="fa-solid fa-file-csv"></i>
+    <span>Carica CSV gestionale (Veicoli)</span>
+    <input
+      ref={csvGestionaleRef}
+      type="file"
+      accept=".csv,text/csv"
+      className="hidden"
+      onChange={async (e)=>{{
+        try{{
+          const f = e.target.files?.[0];
+          if (f) await importGestionaleCSV(f);
+        }} catch(err){{
+          toast("❌ Errore import CSV: " + (err?.message || err));
+          console.error("CSV gestionale import error:", err);
+        }} finally {{
+          e.target.value = "";
+        }}
+      }}}
+    />
+  </label>
+
   <span className="text-xs text-white/60">Dopo la selezione, l'import parte automaticamente.</span>
 </div>
               <div className="text-xs text-white/50">Suggerimento: per sostituire tutto attiva “Sostituisci”.</div>
