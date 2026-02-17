@@ -3729,10 +3729,11 @@ return (
       const [editing, setEditing] = useState(() => _hasPending ? pendingRecord.record : null);
       const [openForm, setOpenForm] = useState(() => _hasPending);
 
-      // Notifica il parent che abbiamo consumato il pendingRecord
+      // Notifica il parent che abbiamo consumato il pendingRecord (pulisce la ref)
       useEffect(() => {
         if (_hasPending && onPendingRecordHandled) onPendingRecordHandled();
-      }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []); // solo al mount
 
       const items = kind === "accident" ? data.accidents : kind === "maintenance" ? data.maintenances : data.bills;
 
@@ -4229,7 +4230,7 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
       const [selectedPlate, setSelectedPlate] = useState("");
       const [summaryPlate, setSummaryPlate] = useState("");
-      const [pendingRecord, setPendingRecord] = useState(null); // {kind, record}
+      const pendingRecordRef = useRef(null); // usa ref per evitare batching issues
 
 
       const applyingRemoteRef = useRef(false);
@@ -4365,9 +4366,12 @@ useEffect(() => {
 
       // Apre direttamente un sinistro/manutenzione/bollo dal VehicleSummary
       const onOpenRecord = (kind, record) => {
+        const targetView = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
+        pendingRecordRef.current = { kind, record }; // scrivi PRIMA di cambiare view
         setSummaryPlate(""); // chiudi il summary
-        setView(kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills");
-        setPendingRecord({ kind, record });
+        // Usiamo flushSync-like via setTimeout(0) per garantire che la ref
+        // sia scritta PRIMA che React rielabori View con la nuova view
+        setView(targetView);
       };
 
       // Funzione per backup manuale
@@ -4389,9 +4393,9 @@ useEffect(() => {
       const View = () => {
         if (view === "dashboard") return <Dashboard data={data} onOpenSummary={onOpenSummary} />;
         if (view === "vehicles") return <VehiclesView data={data} setData={setData} onOpenSummary={onOpenSummary} toast={toast} />;
-        if (view === "accidents") return <GenericListView kind="accident" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecord} onPendingRecordHandled={()=>setPendingRecord(null)} />;
-        if (view === "maintenances") return <GenericListView kind="maintenance" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecord} onPendingRecordHandled={()=>setPendingRecord(null)} />;
-        if (view === "bills") return <GenericListView kind="bill" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecord} onPendingRecordHandled={()=>setPendingRecord(null)} />;
+        if (view === "accidents") return <GenericListView key={"acc-"+(pendingRecordRef.current?.record?.id||"list")} kind="accident" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
+        if (view === "maintenances") return <GenericListView key={"mnt-"+(pendingRecordRef.current?.record?.id||"list")} kind="maintenance" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
+        if (view === "bills") return <GenericListView key={"bil-"+(pendingRecordRef.current?.record?.id||"list")} kind="bill" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
         if (view === "suppliers") return <SuppliersView data={data} setData={setData} toast={toast} />;
         return <ExportImportPanel data={data} setData={setData} toast={toast} />;
       };
