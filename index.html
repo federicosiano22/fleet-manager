@@ -4436,8 +4436,6 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
         return () => {};
       }, [data, session]);
 
-      const ENABLE_DB_AUTO_REFRESH = false;
-
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
@@ -4448,36 +4446,9 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
           setTimeout(() => { applyingRemoteRef.current = false; }, 0);
         }
       };
-useEffect(() => {
-  if (!ENABLE_DB_AUTO_REFRESH) return;
-  // Lightweight refresh strategy (no Realtime subscriptions):
-  // - refresh when tab becomes visible
-  // - refresh periodically while visible (every 120s)
-  if (!session) return;
 
-  let timer = null;
+// DB auto-refresh disabled: manual reload only
 
-  const refreshIfVisible = async () => {
-    if (document.hidden) return;
-    if (applyingRemoteRef.current) return;
-    if ((window.__FM_MODAL_COUNT__ || 0) > 0) return;
-    await safeFetchAll();
-  };
-
-  const onVisibility = () => { refreshIfVisible(); };
-
-  document.addEventListener("visibilitychange", onVisibility);
-
-  timer = setInterval(() => { refreshIfVisible(); }, 120000);
-
-  // initial
-  refreshIfVisible();
-
-  return () => {
-    document.removeEventListener("visibilitychange", onVisibility);
-    if (timer) clearInterval(timer);
-  };
-}, [session]);
 
       useEffect(() => {
   (async () => {
