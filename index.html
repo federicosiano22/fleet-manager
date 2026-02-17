@@ -176,6 +176,50 @@ const { useEffect, useMemo, useRef, useState } = React;
       if (db.error) throw db.error;
     }
 
+
+
+  // -----------------------------------------------------------------------------
+  // GLOBAL: Normalize date values before sending to Supabase (Postgres DATE columns)
+  // Accepts: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, and converts "n.d." / "-" / "" to null
+  // -----------------------------------------------------------------------------
+  function normalizeDate(v) {
+    if (v === null || v === undefined) return null;
+    let s = String(v).trim();
+    if (!s) return null;
+
+    // Remove wrapping quotes
+    s = s.replace(/^"|"$/g, "").trim();
+    const low = s.toLowerCase();
+
+    // Common "no date" tokens
+    if (["n.d.", "nd", "n.d", "n/a", "na", "none", "-", "—", "null"].includes(low)) return null;
+
+    // Already ISO
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    // DD/MM/YYYY or DD-MM-YYYY
+    const m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+    if (m) {
+      const dd = String(m[1]).padStart(2, "0");
+      const mm = String(m[2]).padStart(2, "0");
+      let yy = String(m[3]);
+      if (yy.length === 2) yy = "20" + yy; // best-effort
+      const iso = `${yy}-${mm}-${dd}`;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    }
+
+    // Fallback: attempt Date parse
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    return null;
+  }
+
 async function pushAllToDB(appData) {
   // Helper function per gestire valori numerici null
   const parseNumOrNull = (val) => {
