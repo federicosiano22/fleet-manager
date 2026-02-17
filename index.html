@@ -417,8 +417,8 @@ async function upsertTable(table, rows) {
     vin: v.vin ?? "",
     km: (v.km ?? null),
 
-    availability_start: (v.availabilityStart ?? v.availability_start ?? null),
-    availability_end: (v.availabilityEnd ?? v.availability_end ?? null),
+    availability_start: normalizeDateForDB(v.availabilityStart ?? v.availability_start),
+    availability_end: normalizeDateForDB(v.availabilityEnd ?? v.availability_end),
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
     notes: v.notes || "",
 
