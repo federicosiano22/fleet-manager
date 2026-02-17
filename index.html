@@ -3218,7 +3218,9 @@ return (
           const maints = replaceMode ? mNorm : merged(prev.maintenances, mNorm, m => m.plate + "|" + (m.date||"") + "|" + (m.type||""));
           const bills = replaceMode ? bNorm : merged(prev.bills, bNorm, b => b.plate + "|" + (b.dueDate||"") + "|" + (b.type||""));
           const suppliers = replaceMode ? nextSuppliers : merged(prev.suppliers, nextSuppliers, s => (s.name||"").toLowerCase()+"|"+(s.type||"").toLowerCase());
-          return { ...prev, vehicles, accidents, maintenances: maints, bills, suppliers };
+          const newData = { ...prev, vehicles, accidents, maintenances: maints, bills, suppliers };
+          saveStore(newData);
+          return newData;
         });
 
         toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
@@ -3977,7 +3979,9 @@ return (
           const arr = prev[key];
           const idx = arr.findIndex(x => x.id === payload.id);
           const next = idx >= 0 ? arr.map(x => x.id === payload.id ? payload : x) : [...arr, payload];
-          return { ...prev, [key]: next };
+          const newData = { ...prev, [key]: next };
+          saveStore(newData);
+          return newData;
         });
         setOpenForm(false);
         setEditing(null);
