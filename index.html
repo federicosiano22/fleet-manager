@@ -87,7 +87,66 @@ const { useEffect, useMemo, useRef, useState } = React;
   }
 );
 
-    
+
+  // --- Date normalization (global) ---
+  // Converts messy CSV values to Postgres-safe date (YYYY-MM-DD) or null.
+  function normalizeDateForDB(v) {
+    if (v === null || v === undefined) return null;
+    let s = String(v);
+
+    // Strip wrapping quotes often present in CSV empty fields: "" -> empty
+    s = s.replace(/^\s*"+|"+\s*$/g, "");
+
+    // Remove zero-width / non-printing chars
+    s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
+
+    s = s.trim();
+    if (!s) return null;
+
+    // Common "no date" tokens
+    const token = s.toLowerCase().replace(/\s+/g, "");
+    if (
+      token === "-" ||
+      token === "n" ||
+      token === "nd" ||
+      token === "n.d" ||
+      token === "n.d." ||
+      token === "n/d" ||
+      token === "na" ||
+      token === "n/a" ||
+      token === "none"
+    ) return null;
+
+    // If it doesn't start with a digit, it's not a date
+    if (!/^[0-9]/.test(s)) return null;
+
+    // ISO YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    // DD/MM/YYYY or D/M/YYYY or with '-'
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) {
+      const dd = m[1].padStart(2, "0");
+      const mm = m[2].padStart(2, "0");
+      const yyyy = m[3];
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    // Last resort: try Date parsing safely
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const yyyy = String(d.getFullYear());
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    return null;
+  }
+
+  // Back-compat alias if code uses normalizeDate(...)
+  function normalizeDate(v) { return normalizeDateForDB(v); }
+
 
     // ---------- Attachments (Supabase Storage + attachments table) ----------
     const ATT_BUCKET = "fleet-attachments";
