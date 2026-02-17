@@ -642,25 +642,61 @@ async function fetchAllFromDB() {
   }));
 
   const accidentsNorm = (accidents || []).map((a) => ({
-    ...a,
     id: a.id,
     vehicleId: a.vehicle_id || null,
     plate: (a.plate || "").toUpperCase(),
+    date: a.date || null,
+    startDate: a.start_date || null,
+    endDate: a.end_date || null,
+    status: a.status || "aperto",
+    description: a.description || "",
+    location: a.location || "",
+    cost: a.cost ?? null,
+    insuranceReimbursement: a.insurance_reimbursement ?? null,
+    notes: a.notes || "",
+    supplierId: a.supplier_id || null,
+    attachments: a.attachments || null,
+    updatedAt: a.updated_at || null,
+    createdAt: a.created_at || null,
   }));
 
   const maintenancesNorm = (maintenances || []).map((m) => ({
-    ...m,
     id: m.id,
     vehicleId: m.vehicle_id || null,
     plate: (m.plate || "").toUpperCase(),
+    date: m.date || null,
+    startDate: m.start_date || null,
+    endDate: m.end_date || null,
+    status: m.status || "aperto",
+    type: m.type || "",
+    km: m.km ?? null,
+    cost: m.cost ?? null,
+    insuranceReimbursement: m.insurance_reimbursement ?? null,
+    notes: m.notes || "",
+    supplierId: m.supplier_id || null,
+    attachments: m.attachments || null,
+    updatedAt: m.updated_at || null,
+    createdAt: m.created_at || null,
   }));
 
   const billsNorm = (bills || []).map((b) => ({
-    ...b,
     id: b.id,
     vehicleId: b.vehicle_id || null,
     plate: (b.plate || "").toUpperCase(),
+    type: b.type || "",
+    dueDate: b.due_date || null,
+    amount: b.amount ?? null,
+    paid: !!b.paid,
+    supplierId: b.supplier_id || null,
+    notes: b.notes || "",
+    isRecurring: !!b.is_recurring,
+    recurrenceRule: b.recurrence_rule || "",
+    nextDue: b.next_due || null,
+    attachments: b.attachments || null,
+    updatedAt: b.updated_at || null,
+    createdAt: b.created_at || null,
   }));
+
 
   return {
     vehicles: vehiclesNorm,
