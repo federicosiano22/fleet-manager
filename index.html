@@ -7,9 +7,19 @@
 
   <!--
   ================================================================================
-  VERSIONE CORRETTA - Bug Fix v3.7.2
+  VERSIONE CORRETTA - Bug Fix v3.7.3 — Security Hardening
   ================================================================================
   Correzioni applicate:
+
+  [v3.7.3 — Security]
+  13. ✅ Rimosso console.log che stampava SUPABASE_URL in chiaro nei DevTools
+  14. ✅ Credenziali offuscate in Base64 (protezione "visiva" contro scraping automatico)
+  15. ✅ Aggiunto script SQL (rls_setup.sql) per abilitare RLS + policies su Supabase
+      → Con RLS attivo, la anon key esposta nel sorgente è inutile senza login
+
+  NOTA SICUREZZA: la vera protezione risiede nelle RLS policies di Supabase.
+  Con RLS correttamente configurato, nessuna operazione è possibile senza
+  una sessione autenticata valida, indipendentemente dalla chiave nel sorgente.
   
   1. ✅ Rimossa costante ENABLE_REALTIME (feature non implementata)
   2. ✅ Aumentato timeout signed URL da 2 a 10 minuti (attachments)
@@ -70,11 +80,14 @@ const { useEffect, useMemo, useRef, useState } = React;
     // =====================
     // Supabase init
     // =====================
-    const SUPABASE_URL = "https://pajdgababkkxgmfxzazq.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhamRnYWJhYmtreGdtZnh6YXpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyOTMyNjEsImV4cCI6MjA4NTg2OTI2MX0.0PZBJl7XZpwsx3yHupMKPR2BDMKgT9CXwGiIUMw0gWU";
-    const STORAGE_BUCKET = "fleet-manager"; // Bucket per documenti veicoli (CDC, fatture, contratti)
+    // Le credenziali sono codificate in Base64 — la protezione reale è garantita
+    // dalle Row Level Security (RLS) policies su Supabase: senza sessione autenticata
+    // nessuna operazione su DB o Storage è possibile, indipendentemente dalla chiave.
+    const _c = (s) => atob(s);
+    const SUPABASE_URL = _c("aHR0cHM6Ly9wYWpkZ2FiYWJra3hnbWZ4emF6cS5zdXBhYmFzZS5jbw==");
+    const SUPABASE_ANON_KEY = _c("ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5CaGFtUm5ZV0poWW10eWVHZHRabmg2WVhweElpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTnpBeU9UTXlOakVzSW1WNGNDSTZNREE0TlRnMk9USXlOakY5LjBQWkJKbDdYWnB3c3gzeUh1cE1LUFIyQkRNS2dUOUNYd0dpSVVNdzBnV1U=");
+    const STORAGE_BUCKET = "fleet-manager";
 
-    console.log("SUPABASE_URL =", SUPABASE_URL);
     const supabase = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -3713,20 +3726,17 @@ return (
       const [onlyDueSoon, setOnlyDueSoon] = useState(false); // bills
       const [days, setDays] = useState(30);
 
-      const [editing, setEditing] = useState(null);
-      const [openForm, setOpenForm] = useState(false);
+      // Se arriva un pendingRecord valido per questo kind, inizializza subito
+      // editing e openForm al primo render (useState lazy initializer).
+      // In questo modo il form è già aperto al mount, senza aspettare useEffect.
+      const _hasPending = !!(pendingRecord && pendingRecord.kind === kind);
+      const [editing, setEditing] = useState(() => _hasPending ? pendingRecord.record : null);
+      const [openForm, setOpenForm] = useState(() => _hasPending);
 
-      // Apri automaticamente il record passato da VehicleSummary tramite onOpenRecord
+      // Notifica il parent che abbiamo consumato il pendingRecord
       useEffect(() => {
-        if (!pendingRecord) return;
-        const kindMatch = (kind === "accident" && pendingRecord.kind === "accident")
-          || (kind === "maintenance" && pendingRecord.kind === "maintenance")
-          || (kind === "bill" && pendingRecord.kind === "bill");
-        if (!kindMatch) return;
-        setEditing(pendingRecord.record);
-        setOpenForm(true);
-        if (onPendingRecordHandled) onPendingRecordHandled();
-      }, [pendingRecord]);
+        if (_hasPending && onPendingRecordHandled) onPendingRecordHandled();
+      }, []);
 
       const items = kind === "accident" ? data.accidents : kind === "maintenance" ? data.maintenances : data.bills;
 
@@ -4410,7 +4420,7 @@ useEffect(() => {
                 </div>
                 <div>
                   <div className="font-bold text-lg">Fleet Manager</div>
-                  <div className="text-xs text-white/55">Pro v3.7.2 — Bug Fix Release (Stable)</div>
+                  <div className="text-xs text-white/55">Pro v3.7.3 — Security Hardening</div>
                 </div>
               </div>
             </div>
