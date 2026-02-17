@@ -566,90 +566,107 @@ async function getSession() {
   return session;
 }
 
-async function fetchAllFromDB() {
-  const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
-    supabase.from("vehicles").select("*"),
-    supabase.from("suppliers").select("*"),
-    supabase.from("accidents").select("*"),
-    supabase.from("maintenances").select("*"),
-    supabase.from("bills").select("*"),
-  ]);
 
-  for (const r of [vehicles, suppliers, accidents, maintenances, bills]) {
-    if (r.error) throw r.error;
+// Fetch all rows from a table (Supabase/PostgREST returns max 1000 rows by default unless paginated)
+async function fetchAllRows(table, orderCol = "id", pageSize = 1000) {
+  const all = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+
+    // NOTE: range requires a deterministic order for stable paging
+    const res = await supabase
+      .from(table)
+      .select("*")
+      .order(orderCol, { ascending: true, nullsFirst: false })
+      .range(from, to);
+
+    if (res.error) throw res.error;
+
+    const rows = res.data || [];
+    all.push(...rows);
+
+    if (rows.length < pageSize) break;
+    from += pageSize;
   }
 
+  return all;
+}
+
+async function fetchAllFromDB() {
+  const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
+    fetchAllRows("vehicles", "plate", 1000),
+    fetchAllRows("suppliers", "id", 1000),
+    fetchAllRows("accidents", "id", 1000),
+    fetchAllRows("maintenances", "id", 1000),
+    fetchAllRows("bills", "id", 1000),
+  ]);
+
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
-  const toISO = (v) => {
-    if (v === null || v === undefined || v === "") return "";
-    if (typeof v === "number" && v > 10000 && v < 100000) {
-      const d = new Date((v - 25569) * 86400 * 1000);
-      return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-    }
-    if (typeof v === "string") {
-      const s = v.trim();
-      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-      if (m) {
-        const dd = String(m[1]).padStart(2, "0");
-        const mm = String(m[2]).padStart(2, "0");
-        let yy = m[3];
-        if (yy.length === 2) yy = "20" + yy;
-        return `${yy}-${mm}-${dd}`;
-      }
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-      return s.slice(0, 10);
-    }
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-  };
-
-  const vehiclesNorm = (vehicles.data || []).map(v => ({
-    ...v,
-    plate: String(v.plate || "").trim().toUpperCase(),
-    availabilityStart: toISO(v.availabilityStart || v.availability_start),
-    availabilityEnd: toISO(v.availabilityEnd || v.availability_end),
-    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
+  const vehiclesNorm = (vehicles || []).map((v) => ({
+    id: v.id,
+    plate: (v.plate || "").toUpperCase(),
+    category: v.category || "",
+    brand: v.brand || "",
+    model: v.model || "",
+    trim: v.trim || "",
+    type: v.type || "",
+    status: v.status || "available",
+    year: v.year ?? null,
+    seats: v.seats ?? null,
+    transmission: v.transmission || "",
+    fuel: v.fuel || "",
+    color: v.color || "",
+    notes: v.notes || "",
+    purchaseDate: v.purchase_date || null,
+    saleDate: v.sale_date || null,
+    availabilityStart: v.availability_start || null,
+    availabilityEnd: v.availability_end || null,
+    periods: v.periods || [],
+    kw: v.kw ?? null,
+    purchaseType: v.purchase_type ?? null,
+    purchaseCost: v.purchase_cost ?? null,
+    buybackCost: v.buyback_cost ?? null,
+    rtrFee: v.rtr_fee ?? null,
+    holdingCost: v.holding_cost ?? null,
+    updatedAt: v.updated_at || null,
+    createdAt: v.created_at || null,
+    attachments: v.attachments || null,
   }));
 
-  const accidentsNorm = (accidents.data || []).map(a => ({
+  const suppliersNorm = (suppliers || []).map((s) => ({
+    ...s,
+    id: s.id,
+    name: s.name || "",
+  }));
+
+  const accidentsNorm = (accidents || []).map((a) => ({
     ...a,
-    plate: String(a.plate || "").trim().toUpperCase(),
-    startDate: toISO(a.startDate || a.start_date),
-    endDate: toISO(a.endDate || a.end_date),
-    insuranceReimbursement: (a.insuranceReimbursement ?? a.insurance_reimbursement ?? null),
-    supplierId: a.supplierId || a.supplier_id || "",
-    attachmentName: a.attachmentName || a.attachment_name || "",
-    attachmentData: a.attachmentData || a.attachment_data || "",
+    id: a.id,
+    vehicleId: a.vehicle_id || null,
+    plate: (a.plate || "").toUpperCase(),
   }));
 
-  const maintNorm = (maintenances.data || []).map(m => ({
+  const maintenancesNorm = (maintenances || []).map((m) => ({
     ...m,
-    plate: String(m.plate || "").trim().toUpperCase(),
-    startDate: toISO(m.startDate || m.start_date),
-    endDate: toISO(m.endDate || m.end_date),
-    insuranceReimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
-    supplierId: m.supplierId || m.supplier_id || "",
-    attachmentName: m.attachmentName || m.attachment_name || "",
-    attachmentData: m.attachmentData || m.attachment_data || "",
+    id: m.id,
+    vehicleId: m.vehicle_id || null,
+    plate: (m.plate || "").toUpperCase(),
   }));
 
-  const billsNorm = (bills.data || []).map(b => ({
+  const billsNorm = (bills || []).map((b) => ({
     ...b,
-    plate: String(b.plate || "").trim().toUpperCase(),
-    dueDate: toISO(b.dueDate || b.due_date),
-    supplierId: b.supplierId || b.supplier_id || "",
-    isRecurring: !!(b.isRecurring || b.is_recurring),
-    recurrenceRule: b.recurrenceRule || b.recurrence_rule || "",
-    nextDue: toISO(b.nextDue || b.next_due),
+    id: b.id,
+    vehicleId: b.vehicle_id || null,
+    plate: (b.plate || "").toUpperCase(),
   }));
 
   return {
-    ...defaultData,
     vehicles: vehiclesNorm,
-    suppliers: suppliers.data || [],
+    suppliers: suppliersNorm,
     accidents: accidentsNorm,
-    maintenances: maintNorm,
+    maintenances: maintenancesNorm,
     bills: billsNorm,
   };
 }
