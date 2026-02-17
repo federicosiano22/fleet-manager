@@ -181,7 +181,7 @@ async function pushAllToDB(appData) {
       if (v === null || v === undefined) return null;
       const s = String(v).trim();
       if (!s) return null;
-      if (/^n\.?d\.?$/i.test(s) || s === "-") return null;
+      if (/^(n(\.?\s*d\.?\s*)?|nd|n\.d\.?|n\/d|n\/a|na|none)$/i.test(s) || s === "-" ) return null;
       // Accept ISO YYYY-MM-DD
       if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
       // Try D/M/Y or D-M-Y
