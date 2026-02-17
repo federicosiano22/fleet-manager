@@ -3052,8 +3052,184 @@ return (
         toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
       };
 
+      // =====================================================================
+      // IMPORT FLEET SYNC — carica il CSV giornaliero del gestionale
+      // Colonne riconosciute automaticamente (separatore ; o ,):
+      //   Targa → plate
+      //   Telaio → vin
+      //   Inizio disponibilita → availabilityStart
+      //   Fine disponibilita   → availabilityEnd
+      //   Centro ricavo        → hub  (centro di costo)
+      //   Brand                → brand
+      //   Modello              → model
+      //   Anno                 → year
+      //   Tipologia            → category
+      // Logica:
+      //   - Targa esistente → aggiorna SOLO availabilityStart, availabilityEnd, hub
+      //     (non tocca fatture, note, sinistri, manutenzioni, ecc.)
+      //   - Targa non presente → aggiunge il veicolo con i campi base
+      // =====================================================================
+      const importFleetSync = async (file) => {
+        if (!file) return;
+        const text = await file.text();
+
+        // Detect delimiter: semicolon or comma
+        const firstLine = text.split(/\r?\n/)[0] || "";
+        const delim = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : ",";
+
+        // Parse CSV to array of objects
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (lines.length < 2) { toast("❌ File CSV vuoto o non valido."); return; }
+
+        // Header normalization helper
+        const normalizeHeader = (h) =>
+          String(h || "")
+            .toLowerCase()
+            .trim()
+            .replace(/"/g, "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // rimuove accenti
+            .replace(/\s+/g, "_");
+
+        const rawHeaders = lines[0].split(delim).map(h => h.replace(/^"|"$/g, "").trim());
+        const headers = rawHeaders.map(normalizeHeader);
+
+        // Column mapping: normalized header → field name
+        const COL_MAP = {
+          "targa":                  "plate",
+          "telaio":                 "vin",
+          "inizio_disponibilita":   "availabilityStart",
+          "fine_disponibilita":     "availabilityEnd",
+          "centro_ricavo":          "hub",
+          "brand":                  "brand",
+          "modello":                "model",
+          "model":                  "model",
+          "anno":                   "year",
+          "year":                   "year",
+          "tipologia":              "category",
+          "category":               "category",
+          "alimentazione":          "fuel",
+          "trasmissione":           "transmission",
+          "colore_esterni":         "color",
+          "id":                     "externalId",
+          "id_remoto":              "externalId",
+        };
+
+        const getColIndex = (fieldName) => {
+          // exact match on normalized header
+          for (let i = 0; i < headers.length; i++) {
+            if (COL_MAP[headers[i]] === fieldName) return i;
+          }
+          return -1;
+        };
+
+        const idxPlate   = getColIndex("plate");
+        const idxVin     = getColIndex("vin");
+        const idxStart   = getColIndex("availabilityStart");
+        const idxEnd     = getColIndex("availabilityEnd");
+        const idxHub     = getColIndex("hub");
+        const idxBrand   = getColIndex("brand");
+        const idxModel   = getColIndex("model");
+        const idxYear    = getColIndex("year");
+        const idxCat     = getColIndex("category");
+
+        if (idxPlate === -1) {
+          toast('❌ Colonna "Targa" non trovata nel CSV. Verifica il file.');
+          return;
+        }
+
+        // Parse data rows
+        const csvRows = [];
+        for (let i = 1; i < lines.length; i++) {
+          // Handle quoted fields
+          const cols = [];
+          let cur = "", inQ = false;
+          for (const ch of lines[i]) {
+            if (ch === '"') { inQ = !inQ; continue; }
+            if (ch === delim && !inQ) { cols.push(cur.trim()); cur = ""; continue; }
+            cur += ch;
+          }
+          cols.push(cur.trim());
+
+          const plate = normalizePlate(cols[idxPlate] || "");
+          if (!plate) continue;
+
+          csvRows.push({
+            plate,
+            vin:               idxVin   >= 0 ? String(cols[idxVin]  || "").trim() : "",
+            availabilityStart: idxStart >= 0 ? excelSerialToISO(cols[idxStart]) : "",
+            availabilityEnd:   idxEnd   >= 0 ? excelSerialToISO(cols[idxEnd])   : "",
+            hub:               idxHub   >= 0 ? String(cols[idxHub]  || "").trim() : "",
+            brand:             idxBrand >= 0 ? String(cols[idxBrand]|| "").trim() : "",
+            model:             idxModel >= 0 ? String(cols[idxModel]|| "").trim() : "",
+            year:              idxYear  >= 0 ? String(cols[idxYear] || "").trim() : "",
+            category:          idxCat   >= 0 ? String(cols[idxCat]  || "").trim() : "",
+          });
+        }
+
+        if (!csvRows.length) { toast("❌ Nessun veicolo valido trovato nel CSV."); return; }
+
+        let updated = 0, added = 0;
+
+        setData(prev => {
+          // Build a map of existing vehicles by plate
+          const existingMap = new Map(prev.vehicles.map(v => [normalizePlate(v.plate), v]));
+
+          const newVehicles = csvRows.map(row => {
+            const existing = existingMap.get(row.plate);
+            if (existing) {
+              // UPDATE: solo disponibilità e hub, tutto il resto rimane invariato
+              updated++;
+              return {
+                ...existing,
+                availabilityStart: row.availabilityStart || existing.availabilityStart || "",
+                availabilityEnd:   row.availabilityEnd   || existing.availabilityEnd   || "",
+                hub:               row.hub               || existing.hub               || "",
+                // Aggiorna anche VIN se nel CSV è presente e nel DB manca
+                vin:               existing.vin || row.vin || "",
+              };
+            } else {
+              // INSERT: nuovo veicolo con i campi base
+              added++;
+              return {
+                id:                uid(),
+                plate:             row.plate,
+                vin:               row.vin,
+                brand:             row.brand,
+                model:             row.model,
+                year:              row.year,
+                category:          row.category,
+                hub:               row.hub,
+                group:             "",
+                km:                null,
+                availabilityStart: row.availabilityStart,
+                availabilityEnd:   row.availabilityEnd,
+                notes:             "",
+                periods:           [],
+                purchaseType:      "",
+                purchaseCost:      null,
+                buybackCost:       null,
+                rtrFee:            null,
+                holdingCost:       null,
+              };
+            }
+          });
+
+          // Veicoli nel DB che NON sono nel CSV → li manteniamo invariati
+          const csvPlates = new Set(csvRows.map(r => r.plate));
+          const untouchedVehicles = prev.vehicles.filter(v => !csvPlates.has(normalizePlate(v.plate)));
+
+          const merged = [...newVehicles, ...untouchedVehicles];
+          const newData = { ...prev, vehicles: merged };
+          saveStore(newData);
+          return newData;
+        });
+
+        toast(`✅ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti.`);
+      };
+
       const jsonRef = useRef(null);
       const xlsxRef = useRef(null);
+      const fleetSyncRef = useRef(null);
 
       return (
         <div className="space-y-4">
@@ -3069,6 +3245,57 @@ return (
           </DataBar>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            {/* ═══════════════════════════════════════════════════════════
+                FLEET SYNC CARD — import giornaliero CSV gestionale
+            ═══════════════════════════════════════════════════════════ */}
+            <div className="glass rounded-2xl p-4 space-y-3 border-2 border-sky-500/40 md:col-span-2">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-rotate text-sky-400 text-lg"></i>
+                <div className="font-semibold text-sky-100">Sync Giornaliero Fleet CSV</div>
+                <Badge tone="info">Smart Import</Badge>
+              </div>
+              <div className="text-sm text-white/70 space-y-1">
+                <p>Carica il CSV che scarichi ogni giorno dal gestionale — <strong className="text-white">non serve modificarlo</strong>. Il sistema:</p>
+                <ul className="list-disc list-inside text-white/60 text-xs space-y-0.5 ml-2">
+                  <li><span className="text-sky-300 font-semibold">Aggiorna</span> inizio/fine disponibilità e centro di costo per i veicoli già presenti <span className="text-white/50">(fatture, note, sinistri, allegati rimangono intatti)</span></li>
+                  <li><span className="text-emerald-300 font-semibold">Aggiunge</span> i veicoli nuovi con: targa, telaio, brand, modello, disponibilità e centro di costo</li>
+                  <li>Ignora automaticamente le righe senza targa</li>
+                </ul>
+                <p className="text-xs text-white/50 mt-1">
+                  <i className="fa-solid fa-table-columns mr-1"></i>
+                  Colonne rilevate automaticamente:&nbsp;
+                  <code className="text-sky-300">Targa · Telaio · Inizio disponibilita · Fine disponibilita · Centro ricavo · Brand · Modello · Anno · Tipologia</code>
+                </p>
+              </div>
+              <div className="flex gap-3 flex-wrap items-center pt-1">
+                <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600/70 hover:bg-sky-500/90 border border-sky-300/30 cursor-pointer select-none font-semibold text-sm transition-colors">
+                  <i className="fa-solid fa-rotate"></i>
+                  <span>Carica CSV gestionale</span>
+                  <input
+                    ref={fleetSyncRef}
+                    type="file"
+                    accept=".csv,.txt"
+                    className="hidden"
+                    onChange={async (e) => {
+                      try {
+                        const f = e.target.files?.[0];
+                        if (f) await importFleetSync(f);
+                      } catch(err) {
+                        toast("❌ Errore sync fleet: " + (err?.message || err));
+                        console.error("Fleet sync error:", err);
+                      } finally {
+                        e.target.value = "";
+                      }
+                    }}
+                  />
+                </label>
+                <span className="text-xs text-white/55">
+                  Supporta <code className="text-white/80">.csv</code> con separatore <code className="text-white/80">;</code> o <code className="text-white/80">,</code>
+                </span>
+              </div>
+            </div>
+
             <div className="glass rounded-2xl p-4 space-y-3">
               <div className="font-semibold">Template Excel (Tracciato)</div>
               <div className="text-sm text-white/70">
