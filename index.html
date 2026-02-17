@@ -671,6 +671,45 @@ async function fetchAllFromDB() {
   };
 }
 
+
+
+async function fetchVehiclesOnlyFromDB() {
+  const vehicles = await fetchAllRows("vehicles", "plate", 1000);
+  // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
+  const vehiclesNorm = (vehicles || []).map((v) => ({
+    id: v.id,
+    plate: (v.plate || "").toUpperCase(),
+    category: v.category || "",
+    brand: v.brand || "",
+    model: v.model || "",
+    trim: v.trim || "",
+    type: v.type || "",
+    status: v.status || "available",
+    year: v.year ?? null,
+    seats: v.seats ?? null,
+    transmission: v.transmission || "",
+    fuel: v.fuel || "",
+    color: v.color || "",
+    notes: v.notes || "",
+    purchaseDate: v.purchase_date || null,
+    saleDate: v.sale_date || null,
+    availabilityStart: v.availability_start || null,
+    availabilityEnd: v.availability_end || null,
+    periods: v.periods || [],
+    kw: v.kw ?? null,
+    purchaseType: v.purchase_type ?? null,
+    purchaseCost: v.purchase_cost ?? null,
+    buybackCost: v.buyback_cost ?? null,
+    rtrFee: v.rtr_fee ?? null,
+    holdingCost: v.holding_cost ?? null,
+    updatedAt: v.updated_at || null,
+    createdAt: v.created_at || null,
+    attachments: v.attachments || null,
+  }));
+
+  return vehiclesNorm;
+}
+
     // ---------- Utils ----------
     const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36));
     const isUUID = (s) => typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
@@ -4381,8 +4420,8 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
-          const dbData = await fetchAllFromDB();
-          setData(dbData);
+          const vehicles = await fetchVehiclesOnlyFromDB();
+          setData(prev => ({ ...prev, vehicles }));
         } finally {
           // Sblocca dopo aver applicato lo state (evita loop realtime -> setData -> autosync)
           setTimeout(() => { applyingRemoteRef.current = false; }, 0);
