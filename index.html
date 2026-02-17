@@ -179,11 +179,34 @@ async function pushAllToDB(appData) {
 
     const normalizeDateForDB = (v) => {
       if (v === null || v === undefined) return null;
-      const s = String(v).trim();
+      let s = String(v);
+      // Remove zero-width and non-printing chars that can break regex/trim
+      s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
+      s = s.trim();
       if (!s) return null;
-      if (/^(n(\.?\s*d\.?\s*)?|nd|n\.d\.?|n\/d|n\/a|na|none)$/i.test(s) || s === "-" ) return null;
+
+      // Collapse internal spaces (e.g. "n d", "n. d.")
+      const sCompact = s.replace(/\s+/g, "").toLowerCase();
+
+      // Common placeholders / non-dates
+      if (
+        s === "-" ||
+        sCompact === "n" ||
+        sCompact === "nd" ||
+        sCompact === "n.d." ||
+        sCompact === "n.d" ||
+        sCompact === "n/d" ||
+        sCompact === "na" ||
+        sCompact === "n/a" ||
+        sCompact === "none"
+      ) return null;
+
+      // If the first meaningful char is not a digit, reject (prevents "n", "no", etc.)
+      if (!/^\d/.test(s)) return null;
+
       // Accept ISO YYYY-MM-DD
       if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
       // Try D/M/Y or D-M-Y
       const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) || s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
       if (m) {
@@ -193,8 +216,11 @@ async function pushAllToDB(appData) {
         if (yy.length === 2) yy = "20" + yy;
         return `${yy}-${mm}-${dd}`;
       }
+
+      // Fallback: Date.parse on known formats
       const d = new Date(s);
       if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+
       return null;
     };
   // 1) VEHICLES: mapping + upsert su plate
