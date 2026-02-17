@@ -3260,7 +3260,24 @@ return (
             return newData;
           });
 
-          toast(`CSV gestionale import: ${added} aggiunti, ${updated} aggiornati, ${skipped} saltati.`);
+          toast(`CSV gestionale import: ${added} aggiunti, ${updated} aggiornati, ${skipped} saltati. Sincronizzazione DB in corso...`);
+
+          // Sync immediato su Supabase dei veicoli aggiornati
+          try {
+            // Leggiamo i veicoli aggiornati dallo stato più recente
+            setData(prev => {
+              // fire-and-forget: non blocchiamo la UI
+              upsertTable("vehicles", prev.vehicles).then(() => {
+                toast(`✅ CSV sincronizzato su DB: ${added} aggiunti, ${updated} aggiornati.`);
+              }).catch(e => {
+                console.error("Errore sync DB dopo CSV import", e);
+                toast("⚠️ Dati locali aggiornati ma errore sync DB: " + (e?.message || e));
+              });
+              return prev; // non modifica lo stato, solo legge
+            });
+          } catch (e) {
+            console.error("Errore sync DB dopo CSV import", e);
+          }
         } catch (e) {
           console.error("CSV gestionale import error", e);
           toast("Errore import CSV gestionale: " + (e?.message || e));
