@@ -4420,8 +4420,8 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
-          const vehicles = await fetchVehiclesOnlyFromDB();
-          setData(prev => ({ ...prev, vehicles }));
+          const dbData = await fetchAllFromDB();
+          setData(prev => ({ ...prev, ...dbData }));
         } finally {
           // Sblocca dopo aver applicato lo state (evita loop realtime -> setData -> autosync)
           setTimeout(() => { applyingRemoteRef.current = false; }, 0);
