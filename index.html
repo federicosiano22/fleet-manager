@@ -4436,6 +4436,10 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
         return () => {};
       }, [data, session]);
 
+      const ENABLE_DB_AUTO_REFRESH = false;
+
+      const ENABLE_DB_AUTO_REFRESH = false;
+
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
@@ -4447,6 +4451,7 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
         }
       };
 useEffect(() => {
+  if (!ENABLE_DB_AUTO_REFRESH) return;
   // Lightweight refresh strategy (no Realtime subscriptions):
   // - refresh when tab becomes visible
   // - refresh periodically while visible (every 120s)
