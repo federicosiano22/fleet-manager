@@ -426,6 +426,16 @@ async function upsertTable(table, rows) {
   if (error) throw error;
 }
 
+
+// Batch helper (avoids payload limits on large imports)
+async function upsertVehiclesChunked(rows, chunkSize = 500) {
+  if (!rows || !rows.length) return;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    await upsertTable("vehicles", chunk);
+  }
+}
+
 async function deleteRowFromDB(table, row) {
   // Delete by id (most tables) or by plate for vehicles
   if (!row) return;
@@ -3215,6 +3225,8 @@ return (
 
         let updated = 0, added = 0;
 
+        let __finalVehicles = null;
+
         setData(prev => {
           // Build a map of existing vehicles by plate
           const existingMap = new Map(prev.vehicles.map(v => [normalizePlate(v.plate), v]));
@@ -3269,7 +3281,17 @@ return (
           return newData;
         });
 
-        toast(`✅ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti.`);
+        // Scrivi subito su Supabase (DB ufficiale)
+        try {
+          await requireSession();
+          if (__finalVehicles && __finalVehicles.length) {
+            await upsertVehiclesChunked(__finalVehicles, 500);
+          }
+          toast(`✅ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti. (Salvato su DB)`);
+        } catch (e) {
+          console.error(e);
+          toast(`⚠️ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti. (DB non aggiornato: ${(e && (e.message||e.toString())) || "errore"})`);
+        }
       };
 
       const jsonRef = useRef(null);
