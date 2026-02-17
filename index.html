@@ -223,7 +223,7 @@ async function pushAllToDB(appData) {
   const ensureId = (x) => ({ ...x, id: x.id || crypto.randomUUID() });
 
   // Normalize date values before sending to Supabase (date columns reject invalid strings like "n.d.")
-  const function normalizeDate(v) {
+  function normalizeDate(v) {
     if (v === null || v === undefined) return null;
     let s = String(v).trim();
     if (!s) return null;
