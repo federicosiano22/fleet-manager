@@ -87,66 +87,7 @@ const { useEffect, useMemo, useRef, useState } = React;
   }
 );
 
-
-  // --- Date normalization (global) ---
-  // Converts messy CSV values to Postgres-safe date (YYYY-MM-DD) or null.
-  function normalizeDateForDB(v) {
-    if (v === null || v === undefined) return null;
-    let s = String(v);
-
-    // Strip wrapping quotes often present in CSV empty fields: "" -> empty
-    s = s.replace(/^\s*"+|"+\s*$/g, "");
-
-    // Remove zero-width / non-printing chars
-    s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
-
-    s = s.trim();
-    if (!s) return null;
-
-    // Common "no date" tokens
-    const token = s.toLowerCase().replace(/\s+/g, "");
-    if (
-      token === "-" ||
-      token === "n" ||
-      token === "nd" ||
-      token === "n.d" ||
-      token === "n.d." ||
-      token === "n/d" ||
-      token === "na" ||
-      token === "n/a" ||
-      token === "none"
-    ) return null;
-
-    // If it doesn't start with a digit, it's not a date
-    if (!/^[0-9]/.test(s)) return null;
-
-    // ISO YYYY-MM-DD
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-    // DD/MM/YYYY or D/M/YYYY or with '-'
-    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (m) {
-      const dd = m[1].padStart(2, "0");
-      const mm = m[2].padStart(2, "0");
-      const yyyy = m[3];
-      return `${yyyy}-${mm}-${dd}`;
-    }
-
-    // Last resort: try Date parsing safely
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) {
-      const yyyy = String(d.getFullYear());
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd}`;
-    }
-
-    return null;
-  }
-
-  // Back-compat alias if code uses normalizeDate(...)
-  function normalizeDate(v) { return normalizeDateForDB(v); }
-
+    
 
     // ---------- Attachments (Supabase Storage + attachments table) ----------
     const ATT_BUCKET = "fleet-attachments";
@@ -234,56 +175,6 @@ async function pushAllToDB(appData) {
     return isNaN(num) ? null : num;
   };
 
-
-
-    const normalizeDateForDB = (v) => {
-      if (v === null || v === undefined) return null;
-      let s = String(v);
-      // Remove zero-width and non-printing chars that can break regex/trim
-      s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
-      // Strip surrounding quotes that may come from CSV fields like ""
-      s = s.replace(/^"+|"+$/g, "");
-      s = s.trim();
-      if (!s) return null;
-
-      // Collapse internal spaces (e.g. "n d", "n. d.")
-      const sCompact = s.replace(/\s+/g, "").toLowerCase();
-
-      // Common placeholders / non-dates
-      if (
-        s === "-" ||
-        sCompact === "n" ||
-        sCompact === "nd" ||
-        sCompact === "n.d." ||
-        sCompact === "n.d" ||
-        sCompact === "n/d" ||
-        sCompact === "na" ||
-        sCompact === "n/a" ||
-        sCompact === "none"
-      ) return null;
-
-      // If the first meaningful char is not a digit, reject (prevents "n", "no", etc.)
-      if (!/^\d/.test(s)) return null;
-
-      // Accept ISO YYYY-MM-DD
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-      // Try D/M/Y or D-M-Y
-      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) || s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
-      if (m) {
-        const dd = String(m[1]).padStart(2, "0");
-        const mm = String(m[2]).padStart(2, "0");
-        let yy = String(m[3]);
-        if (yy.length === 2) yy = "20" + yy;
-        return `${yy}-${mm}-${dd}`;
-      }
-
-      // Fallback: Date.parse on known formats
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-
-      return null;
-    };
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
     .filter(v => (v?.plate || "").trim() !== "")
@@ -305,8 +196,8 @@ async function pushAllToDB(appData) {
       buyback_cost: parseNumOrNull(v.buyback_cost ?? v.buybackCost),
       rtr_fee: parseNumOrNull(v.rtr_fee ?? v.rtrFee),
       holding_cost: parseNumOrNull(v.holding_cost ?? v.holdingCost),
-      availability_start: normalizeDateForDB(v.availabilityStart ?? v.availability_start),
-      availability_end: normalizeDateForDB(v.availabilityEnd ?? v.availability_end),
+      availability_start: v.availabilityStart || v.availability_start || null,
+      availability_end: v.availabilityEnd || v.availability_end || null,
       periods: v.periods || [],
       notes: v.notes || "",
       updated_at: new Date().toISOString(),
@@ -417,8 +308,8 @@ async function upsertTable(table, rows) {
     vin: v.vin ?? "",
     km: (v.km ?? null),
 
-    availability_start: normalizeDateForDB(v.availabilityStart ?? v.availability_start),
-    availability_end: normalizeDateForDB(v.availabilityEnd ?? v.availability_end),
+    availability_start: (v.availabilityStart ?? v.availability_start ?? null),
+    availability_end: (v.availabilityEnd ?? v.availability_end ?? null),
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
     notes: v.notes || "",
 
@@ -429,8 +320,8 @@ async function upsertTable(table, rows) {
     rtr_fee: (v.rtrFee ?? v.rtr_fee ?? null),
     holding_cost: (v.holdingCost ?? v.holding_cost ?? null),
 
-    purchase_date: normalizeDateForDB(v.purchaseDate ?? v.purchase_date),
-    sale_date: normalizeDateForDB(v.saleDate ?? v.sale_date),
+    purchase_date: (v.purchaseDate ?? v.purchase_date ?? null),
+    sale_date: (v.saleDate ?? v.sale_date ?? null),
 
     hc: (v.hc ?? v.h_c ?? v.hc_text ?? null),
 
@@ -557,117 +448,130 @@ async function getSession() {
   return session;
 }
 
-
-async function fetchAllRowsRaw(table, orderCol = "id", asc = true) {
-  const pageSize = 1000;
-  let from = 0;
-  let all = [];
-  while (true) {
-    const to = from + pageSize - 1;
-    const { data, error } = await supabase
-      .from(table)
-      .select("*")
-      .order(orderCol, { ascending: asc })
-      .range(from, to);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all = all.concat(data);
-    if (data.length < pageSize) break;
-    from += pageSize;
-  }
-  return all;
-}
-
 async function fetchAllFromDB() {
-  const [vehiclesData, suppliersData, accidentsData, maintenancesData, billsData] = await Promise.all([
-    fetchAllRowsRaw("vehicles", "plate", true),
-    fetchAllRowsRaw("suppliers", "id", true),
-    fetchAllRowsRaw("accidents", "id", true),
-    fetchAllRowsRaw("maintenances", "id", true),
-    fetchAllRowsRaw("bills", "id", true),
-  ]);
+  // Fetch all rows with pagination (PostgREST default limit can be 1000)
+  const fetchAllRows = async (table) => {
+    const pageSize = 1000;
+    let from = 0;
+    const out = [];
+    while (true) {
+      const { data, error } = await supabase.from(table).select("*").range(from, from + pageSize - 1);
+      if (error) throw error;
+      out.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+      from += pageSize;
+    }
+    return out;
+  };
 
-  const vehicles = { data: vehiclesData };
-  const suppliers = { data: suppliersData };
-  const accidents = { data: accidentsData };
-  const maintenances = { data: maintenancesData };
-  const bills = { data: billsData };
+  const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
+    fetchAllRows("vehicles"),
+    fetchAllRows("suppliers"),
+    fetchAllRows("accidents"),
+    fetchAllRows("maintenances"),
+    fetchAllRows("bills"),
+  ]);
 
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
   const toISO = (v) => {
-    if (v === null || v === undefined || v === "") return "";
+    if (v === null || v === undefined) return null;
+    // Handle weird CSV artifacts like "\"\"" (string containing two quotes)
+    const s0 = String(v).trim();
+    if (s0 === "" || s0 === '""' || s0 === "''") return null;
+
+    // Excel serial date
     if (typeof v === "number" && v > 10000 && v < 100000) {
       const d = new Date((v - 25569) * 86400 * 1000);
-      return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
     }
-    if (typeof v === "string") {
-      const s = v.trim();
-      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-      if (m) {
-        const dd = String(m[1]).padStart(2, "0");
-        const mm = String(m[2]).padStart(2, "0");
-        let yy = m[3];
-        if (yy.length === 2) yy = "20" + yy;
-        return `${yy}-${mm}-${dd}`;
-      }
-      const d = new Date(s);
-      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-      return s.slice(0, 10);
+
+    // Already ISO date
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s0)) return s0;
+
+    // dd/mm/yyyy or dd-mm-yyyy
+    const m = s0.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) {
+      const dd = String(m[1]).padStart(2, "0");
+      const mm = String(m[2]).padStart(2, "0");
+      const yyyy = m[3];
+      return `${yyyy}-${mm}-${dd}`;
     }
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+
+    // If it doesn't start with a digit, treat as missing (e.g. "n", "nd", "n.d.")
+    if (!/^\d/.test(s0)) return null;
+
+    const d = new Date(s0);
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
   };
 
-  const vehiclesNorm = (vehicles.data || []).map(v => ({
-    ...v,
-    plate: String(v.plate || "").trim().toUpperCase(),
-    availabilityStart: toISO(v.availabilityStart || v.availability_start),
-    availabilityEnd: toISO(v.availabilityEnd || v.availability_end),
-    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
+  const normVehicles = vehicles.map((v) => ({
+    id: v.id,
+    plate: v.plate,
+    vin: v.vin,
+    brand: v.brand,
+    model: v.model,
+    category: v.category,
+    year: v.year ?? null,
+    fuel: v.fuel ?? "",
+    transmission: v.transmission ?? "",
+    exterior_color: v.exterior_color ?? "",
+    engine: v.engine ?? "",
+    power: v.power ?? "",
+    acceleration: v.acceleration ?? "",
+    top_speed: v.top_speed ?? "",
+    doors: v.doors ?? null,
+    seats: v.seats ?? "",
+    gps: v.gps ?? "",
+    tank: v.tank ?? "",
+    list_price: v.list_price ?? null,
+    total_orders: v.total_orders ?? null,
+    purchase_type: v.purchase_type ?? "",
+    purchase_cost: v.purchase_cost ?? null,
+    buyback_cost: v.buyback_cost ?? null,
+    rtr_fee: v.rtr_fee ?? null,
+    holding_cost: v.holding_cost ?? null,
+    availabilityStart: toISO(v.availability_start),
+    availabilityEnd: toISO(v.availability_end),
+    periods: Array.isArray(v.periods) ? v.periods : [],
+    notes: v.notes ?? "",
+    purchaseDate: toISO(v.purchase_date),
+    saleDate: toISO(v.sale_date),
+    hc: v.hc ?? null,
+    updatedAt: v.updated_at ?? null,
   }));
 
-  const accidentsNorm = (accidents.data || []).map(a => ({
+  const normSuppliers = suppliers.map((s) => ({
+    ...s,
+    createdAt: s.created_at ?? null,
+    updatedAt: s.updated_at ?? null,
+  }));
+
+  const normAccidents = accidents.map((a) => ({
     ...a,
-    plate: String(a.plate || "").trim().toUpperCase(),
-    startDate: toISO(a.startDate || a.start_date),
-    endDate: toISO(a.endDate || a.end_date),
-    insuranceReimbursement: (a.insuranceReimbursement ?? a.insurance_reimbursement ?? null),
-    supplierId: a.supplierId || a.supplier_id || "",
-    attachmentName: a.attachmentName || a.attachment_name || "",
-    attachmentData: a.attachmentData || a.attachment_data || "",
+    createdAt: a.created_at ?? null,
+    updatedAt: a.updated_at ?? null,
+    date: toISO(a.date),
+    closeDate: toISO(a.close_date),
   }));
 
-  const maintNorm = (maintenances.data || []).map(m => ({
+  const normMaints = maintenances.map((m) => ({
     ...m,
-    plate: String(m.plate || "").trim().toUpperCase(),
-    startDate: toISO(m.startDate || m.start_date),
-    endDate: toISO(m.endDate || m.end_date),
-    insuranceReimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
-    supplierId: m.supplierId || m.supplier_id || "",
-    attachmentName: m.attachmentName || m.attachment_name || "",
-    attachmentData: m.attachmentData || m.attachment_data || "",
+    createdAt: m.created_at ?? null,
+    updatedAt: m.updated_at ?? null,
+    startDate: toISO(m.start_date),
+    endDate: toISO(m.end_date),
   }));
 
-  const billsNorm = (bills.data || []).map(b => ({
+  const normBills = bills.map((b) => ({
     ...b,
-    plate: String(b.plate || "").trim().toUpperCase(),
-    dueDate: toISO(b.dueDate || b.due_date),
-    supplierId: b.supplierId || b.supplier_id || "",
-    isRecurring: !!(b.isRecurring || b.is_recurring),
-    recurrenceRule: b.recurrenceRule || b.recurrence_rule || "",
-    nextDue: toISO(b.nextDue || b.next_due),
+    createdAt: b.created_at ?? null,
+    updatedAt: b.updated_at ?? null,
+    dueDate: toISO(b.due_date),
+    paidDate: toISO(b.paid_date),
   }));
 
-  return {
-    ...defaultData,
-    vehicles: vehiclesNorm,
-    suppliers: suppliers.data || [],
-    accidents: accidentsNorm,
-    maintenances: maintNorm,
-    bills: billsNorm,
-  };
+  return { vehicles: normVehicles, suppliers: normSuppliers, accidents: normAccidents, maintenances: normMaints, bills: normBills };
 }
-
 
     // ---------- Utils ----------
     const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36));
@@ -886,22 +790,22 @@ const excelSerialToISO = (v) => {
         r.readAsArrayBuffer(file);
       });
 
-    
-
-    const readFileAsText = (file) =>
-      new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result || ""));
-        r.onerror = reject;
-        r.readAsText(file);
-      });
-const readFileAsDataURL = (file) =>
+    const readFileAsDataURL = (file) =>
       new Promise((resolve, reject) => {
         const r = new FileReader();
         r.onload = () => resolve(r.result);
         r.onerror = reject;
         r.readAsDataURL(file);
+      })
+
+    const readFileAsText = (file) =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsText(file);
       });
+;
 
     // ---------- Storage ----------
     const STORAGE_KEY = "fleet_manager_pro_v2";
@@ -3194,221 +3098,136 @@ return (
         toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
       };
 
-            const parseCSV = (text, delimiter = ";") => {
-        const rows = [];
-        let row = [];
-        let field = "";
-        let inQuotes = false;
-
-        const pushField = () => {
-          // unescape double quotes
-          row.push(field.replace(/""/g, '"'));
-          field = "";
-        };
-        const pushRow = () => {
-          // avoid trailing empty row
-          if (row.length === 1 && row[0] === "" && rows.length === 0) { row = []; return; }
-          rows.push(row);
-          row = [];
-        };
-
-        for (let i = 0; i < text.length; i++) {
-          const c = text[i];
-
-          if (inQuotes) {
-            if (c === '"') {
-              const next = text[i + 1];
-              if (next === '"') { field += '"'; i++; }
-              else { inQuotes = false; }
-            } else {
-              field += c;
-            }
-            continue;
-          }
-
-          if (c === '"') { inQuotes = true; continue; }
-
-          if (c === delimiter) { pushField(); continue; }
-
-          if (c === "\n") {
-            pushField(); pushRow(); continue;
-          }
-          if (c === "\r") {
-            // ignore CR (will be handled by LF)
-            continue;
-          }
-          field += c;
-        }
-        // last field/row
-        pushField();
-        pushRow();
-        return rows;
-      };
-
-      const toISOFromDMY = (v) => {
-        if (v === null || v === undefined) return null;
-        // normalize: remove zero-width/invisible chars and trim
-        let s = String(v)
-          .replace(/[\u200B-\u200D\uFEFF]/g, "")
-          .trim()
-          .toLowerCase();
-
-        if (!s) return null;
-
-        // treat common "no date" tokens as null
-        if (
-          s === "-" ||
-          s === "n" || s === "nd" || s === "n.d" || s === "n.d." ||
-          s === "n/d" || s === "n\u002fd" ||
-          s === "na" || s === "n/a" ||
-          s === "none" || s === "null" || s === "undefined"
-        ) return null;
-
-        // if it doesn't start with a digit, it's not a date we accept
-        if (!/^[0-9]/.test(s)) return null;
-
-        // D/M/Y or D-M-Y
-        const m =
-          s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) ||
-          s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
-
-        if (m) {
-          const dd = String(m[1]).padStart(2, "0");
-          const mm = String(m[2]).padStart(2, "0");
-          let yy = String(m[3]);
-          if (yy.length === 2) yy = "20" + yy;
-          return `${yy}-${mm}-${dd}`;
-        }
-
-        // ISO already
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-        // last resort: Date parser
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-
-        return null;
-      };
-
-      const importGestionaleCSV = async (file) => {
-        if (!file) return;
-        const text = await readFileAsText(file);
-        // detect delimiter (fallback ;)
-        const firstLine = (text.split(/\r?\n/)[0] || "");
-        const delimiter = firstLine.includes(";") ? ";" : (firstLine.includes(",") ? "," : ";");
-        const rows = parseCSV(text, delimiter);
-        if (!rows || rows.length < 2) {
-          toast("⚠️ CSV vuoto o non valido.");
-          return;
-        }
-
-        const norm = (h) => String(h || "").replace(/^\uFEFF/, "").replace(/"/g, "").trim().toLowerCase();
-        const header = rows[0].map(norm);
-
-        const idx = (nameVariants) => {
-          for (const v of nameVariants) {
-            const i = header.indexOf(v);
-            if (i >= 0) return i;
-          }
-          return -1;
-        };
-
-        const iPlate = idx(["targa", "plate"]);
-        const iVin = idx(["telaio", "vin"]);
-        const iBrand = idx(["brand", "marca"]);
-        const iModel = idx(["modello", "model"]);
-        const iCat = idx(["tipologia", "category", "tipo"]);
-        const iStart = idx(["inizio disponibilita", "inizio disponibilità", "availability start", "availability_start"]);
-        const iEnd = idx(["fine disponibilita", "fine disponibilità", "availability end", "availability_end"]);
-
-        if (iPlate < 0) {
-          toast("❌ Colonna 'Targa' non trovata nel CSV.");
-          return;
-        }
-
-        const cutoff = "2024-01-01";
-        const incoming = [];
-        for (let r = 1; r < rows.length; r++) {
-          const row = rows[r];
-          if (!row || row.length === 0) continue;
-
-          const plateRaw = row[iPlate];
-          const plate = String(plateRaw || "").trim().toUpperCase();
-          if (!plate) continue;
-
-          const availabilityStart = iStart >= 0 ? toISOFromDMY(row[iStart]) : null;
-          const availabilityEnd = iEnd >= 0 ? toISOFromDMY(row[iEnd]) : null;
-
-          // Requisito: se non hanno data inizio e data fine disponibilità, non importarli
-          if (!availabilityStart || !availabilityEnd) continue;
-
-          // filtro richiesto: solo veicoli con inizio disponibilità >= 01/01/2024
-          if (availabilityStart < cutoff) continue;
-          const vin = iVin >= 0 ? String(row[iVin] || "").trim() : "";
-          const brand = iBrand >= 0 ? String(row[iBrand] || "").trim() : "";
-          const model = iModel >= 0 ? String(row[iModel] || "").trim() : "";
-          const category = iCat >= 0 ? String(row[iCat] || "").trim() : "";
-
-          incoming.push({ plate, vin, brand, model, category, availabilityStart, availabilityEnd });
-        }
-
-        if (incoming.length === 0) {
-          toast("⚠️ Nessun veicolo importato (filtro 01/01/2024 o righe incomplete).");
-          return;
-        }
-
-        setData(prev => {
-          const prevVehicles = Array.isArray(prev.vehicles) ? prev.vehicles : [];
-          const byPlate = new Map(prevVehicles.map(v => [String(v.plate || "").trim().toUpperCase(), v]));
-          for (const inc of incoming) {
-            const existing = byPlate.get(inc.plate);
-            if (existing) {
-              byPlate.set(inc.plate, {
-                ...existing,
-                plate: inc.plate,
-                vin: inc.vin || existing.vin || "",
-                brand: inc.brand || existing.brand || "",
-                model: inc.model || existing.model || "",
-                category: inc.category || existing.category || "",
-                availabilityStart: inc.availabilityStart || existing.availabilityStart || "",
-                availabilityEnd: inc.availabilityEnd || existing.availabilityEnd || "",
-              });
-
-            } else {
-              byPlate.set(inc.plate, {
-                id: crypto.randomUUID(),
-                plate: inc.plate,
-                brand: inc.brand || "",
-                model: inc.model || "",
-                year: "",
-                category: inc.category || "",
-                hub: "",
-                group: "",
-                vin: inc.vin || "",
-                km: "",
-                availabilityStart: inc.availabilityStart || "",
-                availabilityEnd: inc.availabilityEnd || "",
-                notes: "",
-                periods: [],
-              });
-
-            }
-          }
-
-          const mergedVehicles = Array.from(byPlate.values());
-          // Keep ordering stable-ish
-          mergedVehicles.sort((a,b)=>String(a.plate||"").localeCompare(String(b.plate||"")));
-
-          const next = { ...prev, vehicles: mergedVehicles };
-          return next;
-        });
-
-        toast(`✅ CSV gestionale importato: ${incoming.length} righe (solo inizio disponibilità ≥ 01/01/2024).`);
-      };
-
       const jsonRef = useRef(null);
       const xlsxRef = useRef(null);
       const csvGestionaleRef = useRef(null);
+
+      const parseGestionaleDate = (v) => {
+        if (v === null || v === undefined) return null;
+        let s = String(v).trim();
+        // remove surrounding quotes if any
+        if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
+        // remove zero-width/invisible chars
+        s = s.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+        if (!s) return null;
+        const low = s.toLowerCase().replace(/\s+/g, "");
+        if (["n","nd","n.d.","n.d","n/d","na","n/a","none","-"].includes(low)) return null;
+        const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (m) {
+          const dd = String(m[1]).padStart(2,"0");
+          const mm = String(m[2]).padStart(2,"0");
+          const yyyy = m[3];
+          return `${yyyy}-${mm}-${dd}`;
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        return null;
+      };
+
+      const parseSemicolonCSV = (text) => {
+        const rows = [];
+        let i = 0, field = "", row = [], inQuotes = false;
+        const pushField = () => { row.push(field); field = ""; };
+        const pushRow = () => { rows.push(row); row = []; };
+        while (i < text.length) {
+          const ch = text[i];
+          if (inQuotes) {
+            if (ch === '"') {
+              if (text[i+1] === '"') { field += '"'; i += 2; continue; }
+              inQuotes = false; i++; continue;
+            }
+            field += ch; i++; continue;
+          } else {
+            if (ch === '"') { inQuotes = true; i++; continue; }
+            if (ch === ';') { pushField(); i++; continue; }
+            if (ch === '\r') { i++; continue; }
+            if (ch === '\n') { pushField(); pushRow(); i++; continue; }
+            field += ch; i++; continue;
+          }
+        }
+        // last
+        if (field.length || row.length) { pushField(); pushRow(); }
+        return rows;
+      };
+
+      const importGestionaleCSV = async (file) => {
+        try {
+          const text = await readFileAsText(file);
+          const rows = parseSemicolonCSV(String(text || ""));
+          if (!rows.length) { toast("CSV vuoto."); return; }
+
+          const header = rows[0].map(h => String(h||"").replace(/^"|"$/g,"").trim().toLowerCase());
+          const idx = (name) => header.indexOf(name.toLowerCase());
+          const iStart = idx("inizio disponibilita");
+          const iEnd = idx("fine disponibilita");
+          const iType = idx("tipologia");
+          const iBrand = idx("brand");
+          const iModel = idx("modello");
+          const iPlate = idx("targa");
+          const iVin = idx("telaio");
+
+          if (iStart < 0 || iEnd < 0 || iPlate < 0) {
+            toast("CSV gestionale: colonne richieste non trovate (Targa, Inizio disponibilita, Fine disponibilita).");
+            return;
+          }
+
+          const cutoff = "2024-01-01";
+          let added = 0, updated = 0, skipped = 0;
+
+          setData(prev => {
+            const byPlate = new Map((prev.vehicles || []).map(v => [String(v.plate||"").trim().toUpperCase(), v]));
+            for (let r = 1; r < rows.length; r++) {
+              const line = rows[r];
+              const plateRaw = (line[iPlate] ?? "").toString().trim();
+              const plate = plateRaw.toUpperCase();
+              if (!plate) { skipped++; continue; }
+
+              const startISO = parseGestionaleDate(line[iStart]);
+              const endISO = parseGestionaleDate(line[iEnd]);
+
+              // SKIP if either date missing or invalid
+              if (!startISO || !endISO) { skipped++; continue; }
+              // Cutoff: only start >= 2024-01-01
+              if (startISO < cutoff) { skipped++; continue; }
+
+              const patch = {
+                plate,
+                vin: (iVin >= 0 ? String(line[iVin] ?? "").trim() : "") || null,
+                brand: (iBrand >= 0 ? String(line[iBrand] ?? "").trim() : "") || "",
+                model: (iModel >= 0 ? String(line[iModel] ?? "").trim() : "") || "",
+                category: (iType >= 0 ? String(line[iType] ?? "").trim() : "") || "",
+                availabilityStart: startISO,
+                availabilityEnd: endISO,
+              };
+
+              const existing = byPlate.get(plate);
+              if (existing) {
+                byPlate.set(plate, { ...existing, ...patch });
+                updated++;
+              } else {
+                const id = (crypto?.randomUUID ? crypto.randomUUID() : `v_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+                byPlate.set(plate, {
+                  id,
+                  ...patch,
+                  periods: [],
+                  notes: "",
+                });
+                added++;
+              }
+            }
+
+            const vehicles = Array.from(byPlate.values());
+            return { ...prev, vehicles };
+          });
+
+          toast(`CSV gestionale import: ${added} aggiunti, ${updated} aggiornati, ${skipped} saltati.`);
+        } catch (e) {
+          console.error("CSV gestionale import error", e);
+          toast("Errore import CSV gestionale: " + (e?.message || e));
+        } finally {
+          if (csvGestionaleRef.current) csvGestionaleRef.current.value = "";
+        }
+      };
+
 
       return (
         <div className="space-y-4">
@@ -3470,19 +3289,11 @@ return (
       accept=".csv,text/csv"
       className="hidden"
       onChange={async (e)=>{{
-        try{{
-          const f = e.target.files?.[0];
-          if (f) await importGestionaleCSV(f);
-        }} catch(err){{
-          toast("❌ Errore import CSV: " + (err?.message || err));
-          console.error("CSV gestionale import error:", err);
-        }} finally {{
-          e.target.value = "";
-        }}
+        const f = e.target.files?.[0];
+        if (f) await importGestionaleCSV(f);
       }}}
     />
   </label>
-
   <span className="text-xs text-white/60">Dopo la selezione, l'import parte automaticamente.</span>
 </div>
               <div className="text-xs text-white/50">Suggerimento: per sostituire tutto attiva “Sostituisci”.</div>
