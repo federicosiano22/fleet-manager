@@ -514,11 +514,13 @@ async function fetchAllFromDB() {
   const normVehicles = vehicles.map((v) => ({
     id: v.id,
     plate: v.plate,
-    vin: v.vin,
-    brand: v.brand,
-    model: v.model,
-    category: v.category,
-    year: v.year ?? null,
+    vin: v.vin ?? "",
+    brand: v.brand ?? "",
+    model: v.model ?? "",
+    category: v.category ?? "",
+    hub: v.hub ?? "",        // centro di costo / ricavo
+    group: v.group ?? "",    // gruppo / contratto
+    year: v.year ?? "",
     fuel: v.fuel ?? "",
     transmission: v.transmission ?? "",
     exterior_color: v.exterior_color ?? "",
@@ -537,6 +539,7 @@ async function fetchAllFromDB() {
     buyback_cost: v.buyback_cost ?? null,
     rtr_fee: v.rtr_fee ?? null,
     holding_cost: v.holding_cost ?? null,
+    kw: v.kw ?? null,
     availabilityStart: toISO(v.availability_start),
     availabilityEnd: toISO(v.availability_end),
     periods: Array.isArray(v.periods) ? v.periods : [],
@@ -555,10 +558,15 @@ async function fetchAllFromDB() {
 
   const normAccidents = accidents.map((a) => ({
     ...a,
+    // camelCase aliases per compatibilità con il form
     createdAt: a.created_at ?? null,
     updatedAt: a.updated_at ?? null,
     date: toISO(a.date),
+    startDate: toISO(a.start_date),
+    endDate: toISO(a.end_date),
     closeDate: toISO(a.close_date),
+    supplierId: a.supplier_id ?? "",
+    insuranceReimbursement: a.insurance_reimbursement ?? null,
   }));
 
   const normMaints = maintenances.map((m) => ({
@@ -567,6 +575,8 @@ async function fetchAllFromDB() {
     updatedAt: m.updated_at ?? null,
     startDate: toISO(m.start_date),
     endDate: toISO(m.end_date),
+    supplierId: m.supplier_id ?? "",
+    insuranceReimbursement: m.insurance_reimbursement ?? null,
   }));
 
   const normBills = bills.map((b) => ({
@@ -575,6 +585,10 @@ async function fetchAllFromDB() {
     updatedAt: b.updated_at ?? null,
     dueDate: toISO(b.due_date),
     paidDate: toISO(b.paid_date),
+    supplierId: b.supplier_id ?? "",
+    isRecurring: !!(b.is_recurring),
+    recurrenceRule: b.recurrence_rule ?? "",
+    nextDue: toISO(b.next_due),
   }));
 
   return { vehicles: normVehicles, suppliers: normSuppliers, accidents: normAccidents, maintenances: normMaints, bills: normBills };
