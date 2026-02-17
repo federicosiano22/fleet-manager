@@ -175,6 +175,28 @@ async function pushAllToDB(appData) {
     return isNaN(num) ? null : num;
   };
 
+
+
+    const normalizeDateForDB = (v) => {
+      if (v === null || v === undefined) return null;
+      const s = String(v).trim();
+      if (!s) return null;
+      if (/^n\.?d\.?$/i.test(s) || s === "-") return null;
+      // Accept ISO YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      // Try D/M/Y or D-M-Y
+      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) || s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
+      if (m) {
+        const dd = String(m[1]).padStart(2, "0");
+        const mm = String(m[2]).padStart(2, "0");
+        let yy = String(m[3]);
+        if (yy.length === 2) yy = "20" + yy;
+        return `${yy}-${mm}-${dd}`;
+      }
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      return null;
+    };
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
     .filter(v => (v?.plate || "").trim() !== "")
@@ -196,8 +218,8 @@ async function pushAllToDB(appData) {
       buyback_cost: parseNumOrNull(v.buyback_cost ?? v.buybackCost),
       rtr_fee: parseNumOrNull(v.rtr_fee ?? v.rtrFee),
       holding_cost: parseNumOrNull(v.holding_cost ?? v.holdingCost),
-      availability_start: v.availabilityStart || v.availability_start || null,
-      availability_end: v.availabilityEnd || v.availability_end || null,
+      availability_start: normalizeDateForDB(v.availabilityStart ?? v.availability_start),
+      availability_end: normalizeDateForDB(v.availabilityEnd ?? v.availability_end),
       periods: v.periods || [],
       notes: v.notes || "",
       updated_at: new Date().toISOString(),
@@ -777,7 +799,16 @@ const excelSerialToISO = (v) => {
         r.readAsArrayBuffer(file);
       });
 
-    const readFileAsDataURL = (file) =>
+    
+
+    const readFileAsText = (file) =>
+      new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ""));
+        r.onerror = reject;
+        r.readAsText(file);
+      });
+const readFileAsDataURL = (file) =>
       new Promise((resolve, reject) => {
         const r = new FileReader();
         r.onload = () => resolve(r.result);
