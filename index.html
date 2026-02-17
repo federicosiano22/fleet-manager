@@ -375,6 +375,19 @@ async function pushAllToDB(appData) {
     bills: r5.data?.length || 0,
   };
 }
+
+// Remove duplicates that would break Postgres UPSERT (same conflict key appears multiple times in one batch).
+function dedupeByPlate(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    const plate = String(r.plate || "").trim().toUpperCase();
+    if (!plate) continue;
+    // Keep the last occurrence (newest data wins)
+    map.set(plate, { ...r, plate });
+  }
+  return Array.from(map.values());
+}
+
 async function upsertTable(table, rows) {
   // Robust upsert: map App shape -> DB columns (snake_case) and drop UI-only fields.
   if (!rows || !rows.length) return;
@@ -492,6 +505,16 @@ async function upsertTable(table, rows) {
   else payload = rows;
 
   if (!payload.length) return;
+
+  // Dedupe vehicles by plate to avoid: "ON CONFLICT DO UPDATE command cannot affect row a second time"
+  if (table === "vehicles") {
+    const before = payload.length;
+    payload = dedupeByPlate(payload);
+    const removed = before - payload.length;
+    if (removed > 0 && typeof toast === "function") {
+      toast(`Import: rimossi ${removed} duplicati (stessa targa) prima del salvataggio su DB.`, "warning");
+    }
+  }
 
   // Upsert with appropriate conflict key
   let q = supabase.from(table);
