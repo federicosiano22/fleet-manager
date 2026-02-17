@@ -4417,6 +4417,25 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
       const applyingRemoteRef = useRef(false);
 
+      // Auto-sync: ogni modifica (salvata in UI) viene scritta su Supabase.
+      // Nota: viene bypassato quando stiamo applicando dati provenienti dal DB (applyingRemoteRef=true).
+      const autoSyncTimerRef = useRef(null);
+      useEffect(() => {
+        if (!session) return;
+        if (applyingRemoteRef.current) return;
+        // Debounce per evitare sync continui mentre si digita
+        if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+        autoSyncTimerRef.current = setTimeout(async () => {
+          try {
+            await pushAllToDB(dataRef.current);
+          } catch (e) {
+            console.error("Auto-sync DB failed:", e);
+            toast("Errore durante la sincronizzazione su DB");
+          }
+        }, 1200);
+        return () => {};
+      }, [data, session]);
+
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
