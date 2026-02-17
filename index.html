@@ -7,19 +7,9 @@
 
   <!--
   ================================================================================
-  VERSIONE CORRETTA - Bug Fix v3.7.3 — Security Hardening
+  VERSIONE CORRETTA - Bug Fix v3.7.2
   ================================================================================
   Correzioni applicate:
-
-  [v3.7.3 — Security]
-  13. ✅ Rimosso console.log che stampava SUPABASE_URL in chiaro nei DevTools
-  14. ✅ Credenziali offuscate in Base64 (protezione "visiva" contro scraping automatico)
-  15. ✅ Aggiunto script SQL (rls_setup.sql) per abilitare RLS + policies su Supabase
-      → Con RLS attivo, la anon key esposta nel sorgente è inutile senza login
-
-  NOTA SICUREZZA: la vera protezione risiede nelle RLS policies di Supabase.
-  Con RLS correttamente configurato, nessuna operazione è possibile senza
-  una sessione autenticata valida, indipendentemente dalla chiave nel sorgente.
   
   1. ✅ Rimossa costante ENABLE_REALTIME (feature non implementata)
   2. ✅ Aumentato timeout signed URL da 2 a 10 minuti (attachments)
@@ -84,6 +74,7 @@ const { useEffect, useMemo, useRef, useState } = React;
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhamRnYWJhYmtreGdtZnh6YXpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyOTMyNjEsImV4cCI6MjA4NTg2OTI2MX0.0PZBJl7XZpwsx3yHupMKPR2BDMKgT9CXwGiIUMw0gWU";
     const STORAGE_BUCKET = "fleet-manager"; // Bucket per documenti veicoli (CDC, fatture, contratti)
 
+    console.log("SUPABASE_URL =", SUPABASE_URL);
     const supabase = window.supabase.createClient(
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -176,50 +167,6 @@ const { useEffect, useMemo, useRef, useState } = React;
       if (db.error) throw db.error;
     }
 
-
-
-  // -----------------------------------------------------------------------------
-  // GLOBAL: Normalize date values before sending to Supabase (Postgres DATE columns)
-  // Accepts: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, and converts "n.d." / "-" / "" to null
-  // -----------------------------------------------------------------------------
-  function normalizeDate(v) {
-    if (v === null || v === undefined) return null;
-    let s = String(v).trim();
-    if (!s) return null;
-
-    // Remove wrapping quotes
-    s = s.replace(/^"|"$/g, "").trim();
-    const low = s.toLowerCase();
-
-    // Common "no date" tokens
-    if (["n.d.", "nd", "n.d", "n/a", "na", "none", "-", "—", "null"].includes(low)) return null;
-
-    // Already ISO
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-    // DD/MM/YYYY or DD-MM-YYYY
-    const m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
-    if (m) {
-      const dd = String(m[1]).padStart(2, "0");
-      const mm = String(m[2]).padStart(2, "0");
-      let yy = String(m[3]);
-      if (yy.length === 2) yy = "20" + yy; // best-effort
-      const iso = `${yy}-${mm}-${dd}`;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-    }
-
-    // Fallback: attempt Date parse
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) {
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd}`;
-    }
-
-    return null;
-  }
-
 async function pushAllToDB(appData) {
   // Helper function per gestire valori numerici null
   const parseNumOrNull = (val) => {
@@ -266,38 +213,6 @@ async function pushAllToDB(appData) {
   // Se qualche record non ha id, lo generiamo.
   const ensureId = (x) => ({ ...x, id: x.id || crypto.randomUUID() });
 
-  // Normalize date values before sending to Supabase (date columns reject invalid strings like "n.d.")
-  function normalizeDate(v) {
-    if (v === null || v === undefined) return null;
-    let s = String(v).trim();
-    if (!s) return null;
-    s = s.replace(/^"|"$/g, "").trim();
-    const low = s.toLowerCase();
-    if (["n.d.", "nd", "n/d", "n.a.", "na", "null", "none", "-"].includes(low)) return null;
-
-    // Already ISO date (YYYY-MM-DD)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-    // Common Italian formats: DD/MM/YYYY or DD-MM-YYYY
-    let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-    if (m) {
-      let dd = parseInt(m[1], 10);
-      let mm = parseInt(m[2], 10);
-      let yy = parseInt(m[3].length === 2 ? ("20" + m[3]) : m[3], 10);
-      if (yy >= 1900 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
-        const pad = (n) => String(n).padStart(2, "0");
-        return `${yy}-${pad(mm)}-${pad(dd)}`;
-      }
-      return null;
-    }
-
-    // DateTime ISO -> take date part
-    m = s.match(/^(\d{4}-\d{2}-\d{2})[ T].+$/);
-    if (m) return m[1];
-
-    return null;
-  };
-
   const suppliersRows = (appData.suppliers || []).map(ensureId).map(s => ({
     id: s.id,
     name: s.name || "",
@@ -311,7 +226,7 @@ async function pushAllToDB(appData) {
   const accidentsRows = (appData.accidents || []).map(ensureId).map(a => ({
     id: a.id,
     plate: (a.plate || "").trim().toUpperCase(),
-    date: normalizeDate(a.date || null),
+    date: a.date || null,
     start_date: a.startDate || a.start_date || null,
     end_date: a.endDate || a.end_date || null,
     status: a.status || "",
@@ -375,19 +290,6 @@ async function pushAllToDB(appData) {
     bills: r5.data?.length || 0,
   };
 }
-
-// Remove duplicates that would break Postgres UPSERT (same conflict key appears multiple times in one batch).
-function dedupeByPlate(rows) {
-  const map = new Map();
-  for (const r of rows || []) {
-    const plate = String(r.plate || "").trim().toUpperCase();
-    if (!plate) continue;
-    // Keep the last occurrence (newest data wins)
-    map.set(plate, { ...r, plate });
-  }
-  return Array.from(map.values());
-}
-
 async function upsertTable(table, rows) {
   // Robust upsert: map App shape -> DB columns (snake_case) and drop UI-only fields.
   if (!rows || !rows.length) return;
@@ -406,8 +308,8 @@ async function upsertTable(table, rows) {
     vin: v.vin ?? "",
     km: (v.km ?? null),
 
-    availability_start: normalizeDate(v.availabilityStart ?? v.availability_start ?? null),
-    availability_end: normalizeDate(v.availabilityEnd ?? v.availability_end ?? null),
+    availability_start: (v.availabilityStart ?? v.availability_start ?? null),
+    availability_end: (v.availabilityEnd ?? v.availability_end ?? null),
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
     notes: v.notes || "",
 
@@ -418,8 +320,8 @@ async function upsertTable(table, rows) {
     rtr_fee: (v.rtrFee ?? v.rtr_fee ?? null),
     holding_cost: (v.holdingCost ?? v.holding_cost ?? null),
 
-    purchase_date: normalizeDate(v.purchaseDate ?? v.purchase_date ?? null),
-    sale_date: normalizeDate(v.saleDate ?? v.sale_date ?? null),
+    purchase_date: (v.purchaseDate ?? v.purchase_date ?? null),
+    sale_date: (v.saleDate ?? v.sale_date ?? null),
 
     hc: (v.hc ?? v.h_c ?? v.hc_text ?? null),
 
@@ -444,9 +346,9 @@ async function upsertTable(table, rows) {
     return {
       id: a.id,
       plate: String(a.plate || "").trim().toUpperCase(),
-      date: normalizeDate(a.date || null),
-      start_date: normalizeDate(a.startDate || a.start_date || null),
-      end_date: normalizeDate(a.endDate || a.end_date || null),
+      date: a.date || null,
+      start_date: a.startDate || a.start_date || null,
+      end_date: a.endDate || a.end_date || null,
       status: a.status || "aperto",
       description: a.description || "",
       location: a.location || "",
@@ -506,16 +408,6 @@ async function upsertTable(table, rows) {
 
   if (!payload.length) return;
 
-  // Dedupe vehicles by plate to avoid: "ON CONFLICT DO UPDATE command cannot affect row a second time"
-  if (table === "vehicles") {
-    const before = payload.length;
-    payload = dedupeByPlate(payload);
-    const removed = before - payload.length;
-    if (removed > 0 && typeof toast === "function") {
-      toast(`Import: rimossi ${removed} duplicati (stessa targa) prima del salvataggio su DB.`, "warning");
-    }
-  }
-
   // Upsert with appropriate conflict key
   let q = supabase.from(table);
   if (table === "vehicles") q = q.upsert(payload, { onConflict: "plate" });
@@ -523,16 +415,6 @@ async function upsertTable(table, rows) {
 
   const { error } = await q;
   if (error) throw error;
-}
-
-
-// Batch helper (avoids payload limits on large imports)
-async function upsertVehiclesChunked(rows, chunkSize = 500) {
-  if (!rows || !rows.length) return;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
-    await upsertTable("vehicles", chunk);
-  }
 }
 
 async function deleteRowFromDB(table, row) {
@@ -566,148 +448,92 @@ async function getSession() {
   return session;
 }
 
-
-// Fetch all rows from a table (Supabase/PostgREST returns max 1000 rows by default unless paginated)
-async function fetchAllRows(table, orderCol = "id", pageSize = 1000) {
-  const all = [];
-  let from = 0;
-
-  while (true) {
-    const to = from + pageSize - 1;
-
-    // NOTE: range requires a deterministic order for stable paging
-    const res = await supabase
-      .from(table)
-      .select("*")
-      .order(orderCol, { ascending: true, nullsFirst: false })
-      .range(from, to);
-
-    if (res.error) throw res.error;
-
-    const rows = res.data || [];
-    all.push(...rows);
-
-    if (rows.length < pageSize) break;
-    from += pageSize;
-  }
-
-  return all;
-}
-
 async function fetchAllFromDB() {
   const [vehicles, suppliers, accidents, maintenances, bills] = await Promise.all([
-    fetchAllRows("vehicles", "plate", 1000),
-    fetchAllRows("suppliers", "id", 1000),
-    fetchAllRows("accidents", "id", 1000),
-    fetchAllRows("maintenances", "id", 1000),
-    fetchAllRows("bills", "id", 1000),
+    supabase.from("vehicles").select("*"),
+    supabase.from("suppliers").select("*"),
+    supabase.from("accidents").select("*"),
+    supabase.from("maintenances").select("*"),
+    supabase.from("bills").select("*"),
   ]);
 
+  for (const r of [vehicles, suppliers, accidents, maintenances, bills]) {
+    if (r.error) throw r.error;
+  }
+
   // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
-  const vehiclesNorm = (vehicles || []).map((v) => ({
-    id: v.id,
-    plate: (v.plate || "").toUpperCase(),
-    category: v.category || "",
-    brand: v.brand || "",
-    model: v.model || "",
-    trim: v.trim || "",
-    type: v.type || "",
-    status: v.status || "available",
-    year: v.year ?? null,
-    seats: v.seats ?? null,
-    transmission: v.transmission || "",
-    fuel: v.fuel || "",
-    color: v.color || "",
-    notes: v.notes || "",
-    purchaseDate: v.purchase_date || null,
-    saleDate: v.sale_date || null,
-    availabilityStart: v.availability_start || null,
-    availabilityEnd: v.availability_end || null,
-    periods: v.periods || [],
-    kw: v.kw ?? null,
-    purchaseType: v.purchase_type ?? null,
-    purchaseCost: v.purchase_cost ?? null,
-    buybackCost: v.buyback_cost ?? null,
-    rtrFee: v.rtr_fee ?? null,
-    holdingCost: v.holding_cost ?? null,
-    updatedAt: v.updated_at || null,
-    createdAt: v.created_at || null,
-    attachments: v.attachments || null,
+  const toISO = (v) => {
+    if (v === null || v === undefined || v === "") return "";
+    if (typeof v === "number" && v > 10000 && v < 100000) {
+      const d = new Date((v - 25569) * 86400 * 1000);
+      return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+    }
+    if (typeof v === "string") {
+      const s = v.trim();
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if (m) {
+        const dd = String(m[1]).padStart(2, "0");
+        const mm = String(m[2]).padStart(2, "0");
+        let yy = m[3];
+        if (yy.length === 2) yy = "20" + yy;
+        return `${yy}-${mm}-${dd}`;
+      }
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      return s.slice(0, 10);
+    }
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  };
+
+  const vehiclesNorm = (vehicles.data || []).map(v => ({
+    ...v,
+    plate: String(v.plate || "").trim().toUpperCase(),
+    availabilityStart: toISO(v.availabilityStart || v.availability_start),
+    availabilityEnd: toISO(v.availabilityEnd || v.availability_end),
+    periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
   }));
 
-  const suppliersNorm = (suppliers || []).map((s) => ({
-    ...s,
-    id: s.id,
-    name: s.name || "",
-  }));
-
-  const accidentsNorm = (accidents || []).map((a) => ({
+  const accidentsNorm = (accidents.data || []).map(a => ({
     ...a,
-    id: a.id,
-    vehicleId: a.vehicle_id || null,
-    plate: (a.plate || "").toUpperCase(),
+    plate: String(a.plate || "").trim().toUpperCase(),
+    startDate: toISO(a.startDate || a.start_date),
+    endDate: toISO(a.endDate || a.end_date),
+    insuranceReimbursement: (a.insuranceReimbursement ?? a.insurance_reimbursement ?? null),
+    supplierId: a.supplierId || a.supplier_id || "",
+    attachmentName: a.attachmentName || a.attachment_name || "",
+    attachmentData: a.attachmentData || a.attachment_data || "",
   }));
 
-  const maintenancesNorm = (maintenances || []).map((m) => ({
+  const maintNorm = (maintenances.data || []).map(m => ({
     ...m,
-    id: m.id,
-    vehicleId: m.vehicle_id || null,
-    plate: (m.plate || "").toUpperCase(),
+    plate: String(m.plate || "").trim().toUpperCase(),
+    startDate: toISO(m.startDate || m.start_date),
+    endDate: toISO(m.endDate || m.end_date),
+    insuranceReimbursement: m.insuranceReimbursement || m.insurance_reimbursement || null,
+    supplierId: m.supplierId || m.supplier_id || "",
+    attachmentName: m.attachmentName || m.attachment_name || "",
+    attachmentData: m.attachmentData || m.attachment_data || "",
   }));
 
-  const billsNorm = (bills || []).map((b) => ({
+  const billsNorm = (bills.data || []).map(b => ({
     ...b,
-    id: b.id,
-    vehicleId: b.vehicle_id || null,
-    plate: (b.plate || "").toUpperCase(),
+    plate: String(b.plate || "").trim().toUpperCase(),
+    dueDate: toISO(b.dueDate || b.due_date),
+    supplierId: b.supplierId || b.supplier_id || "",
+    isRecurring: !!(b.isRecurring || b.is_recurring),
+    recurrenceRule: b.recurrenceRule || b.recurrence_rule || "",
+    nextDue: toISO(b.nextDue || b.next_due),
   }));
 
   return {
+    ...defaultData,
     vehicles: vehiclesNorm,
-    suppliers: suppliersNorm,
+    suppliers: suppliers.data || [],
     accidents: accidentsNorm,
-    maintenances: maintenancesNorm,
+    maintenances: maintNorm,
     bills: billsNorm,
   };
-}
-
-
-
-async function fetchVehiclesOnlyFromDB() {
-  const vehicles = await fetchAllRows("vehicles", "plate", 1000);
-  // Normalize DB (snake_case) -> App (camelCase) + date to ISO (YYYY-MM-DD)
-  const vehiclesNorm = (vehicles || []).map((v) => ({
-    id: v.id,
-    plate: (v.plate || "").toUpperCase(),
-    category: v.category || "",
-    brand: v.brand || "",
-    model: v.model || "",
-    trim: v.trim || "",
-    type: v.type || "",
-    status: v.status || "available",
-    year: v.year ?? null,
-    seats: v.seats ?? null,
-    transmission: v.transmission || "",
-    fuel: v.fuel || "",
-    color: v.color || "",
-    notes: v.notes || "",
-    purchaseDate: v.purchase_date || null,
-    saleDate: v.sale_date || null,
-    availabilityStart: v.availability_start || null,
-    availabilityEnd: v.availability_end || null,
-    periods: v.periods || [],
-    kw: v.kw ?? null,
-    purchaseType: v.purchase_type ?? null,
-    purchaseCost: v.purchase_cost ?? null,
-    buybackCost: v.buyback_cost ?? null,
-    rtrFee: v.rtr_fee ?? null,
-    holdingCost: v.holding_cost ?? null,
-    updatedAt: v.updated_at || null,
-    createdAt: v.created_at || null,
-    attachments: v.attachments || null,
-  }));
-
-  return vehiclesNorm;
 }
 
     // ---------- Utils ----------
@@ -806,8 +632,7 @@ const excelSerialToISO = (v) => {
   }
   const d = new Date(v);
   return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-}
-
+};
 
 
     const withinRange = (d, start, end) => {
@@ -1852,6 +1677,56 @@ const deleteInvoice = async (doc) => {
       return (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            {/* ═══════════════════════════════════════════════════════════
+                FLEET SYNC CARD — import CSV gestionale (solo veicoli)
+            ═══════════════════════════════════════════════════════════ */}
+            <div className="glass rounded-2xl p-4 space-y-3 border-2 border-sky-500/40 md:col-span-2">
+              <div className="flex items-center gap-2">
+                <i className="fa-solid fa-rotate text-sky-400 text-lg"></i>
+                <div className="font-semibold text-sky-100">Carica CSV gestionale (Veicoli)</div>
+                <Badge tone="info">Solo Vehicles</Badge>
+              </div>
+              <div className="text-sm text-white/70 space-y-1">
+                <p>Carica il CSV esportato dal gestionale. Il sistema <strong className="text-white">aggiorna solo i veicoli</strong> (targa, telaio, marca, modello, tipo, inizio/fine disponibilità).</p>
+                <ul className="list-disc list-inside text-white/60 text-xs space-y-0.5 ml-2">
+                  <li><span className="text-sky-300 font-semibold">Aggiorna</span> i veicoli esistenti senza toccare sinistri, manutenzioni, fatture, allegati.</li>
+                  <li><span className="text-emerald-300 font-semibold">Aggiunge</span> automaticamente i veicoli nuovi trovati nel file.</li>
+                  <li>Non elimina mai veicoli non presenti nel CSV.</li>
+                </ul>
+                <p className="text-xs text-white/50 mt-1">
+                  <i className="fa-solid fa-table-columns mr-1"></i>
+                  Colonne accettate: <code className="text-sky-300">Targa · Telaio · Marca/Brand · Modello · Tipo/Tipologia · Inizio disponibilita · Fine disponibilita</code>
+                </p>
+              </div>
+              <div className="flex gap-3 flex-wrap items-center pt-1">
+                <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600/70 hover:bg-sky-500/90 border border-sky-300/30 cursor-pointer select-none font-semibold text-sm transition-colors">
+                  <i className="fa-solid fa-upload"></i>
+                  <span>Carica CSV gestionale</span>
+                  <input
+                    ref={fleetSyncRef}
+                    type="file"
+                    accept=".csv,.txt"
+                    className="hidden"
+                    onChange={async (e) => {
+                      try {
+                        const f = e.target.files?.[0];
+                        if (f) await importFleetSync(f);
+                      } catch(err) {
+                        toast("❌ Errore import CSV gestionale: " + (err?.message || err));
+                        console.error("Fleet CSV import error:", err);
+                      } finally {
+                        e.target.value = "";
+                      }
+                    }}
+                  />
+                </label>
+                <span className="text-xs text-white/55">
+                  Supporta <code className="text-white/80">.csv</code> con separatore <code className="text-white/80">;</code> o <code className="text-white/80">,</code>
+                </span>
+              </div>
+            </div>
+
             <Field label="Nome *">
               <input className="w-full px-3 py-2 rounded-xl" value={s.name} onChange={e=>set("name", e.target.value)} />
             </Field>
@@ -2331,7 +2206,7 @@ const supplierOptions = useMemo(() => suppliers.slice().sort((a,b)=>a.name.local
     };
 
     // ---------- Vehicle Summary ----------
-    const VehicleSummary = ({ plate, data, onClose, onOpenRecord }) => {
+    const VehicleSummary = ({ plate, data, onClose }) => {
       const vehicle = data.vehicles.find(v => v.plate === plate);
       const accidents = data.accidents.filter(a => a.plate === plate).sort((a,b)=> (b.date||"").localeCompare(a.date||""));
       const maints = data.maintenances.filter(m => m.plate === plate).sort((a,b)=> (b.date||"").localeCompare(a.date||""));
@@ -2647,15 +2522,6 @@ return (
                           {a.notes && <div className="text-xs text-white/60 mt-2 line-clamp-2">{a.notes}</div>}
                           <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
                             <span>{a.supplierId && supplierById[a.supplierId] ? supplierById[a.supplierId].name : ""}</span>
-                            {onOpenRecord && (
-                              <button
-                                className="rounded-lg px-2 py-1 text-xs bg-sky-500/50 hover:bg-sky-500/80 border border-sky-300/30 font-semibold"
-                                onClick={()=>{ onClose(); onOpenRecord("accident", a); }}
-                                title="Apri e modifica"
-                              >
-                                <i className="fa-solid fa-arrow-up-right-from-square mr-1"></i>Apri
-                              </button>
-                            )}
                           </div>
                           {(a.attachments && a.attachments.length > 0) && (
                             <div className="mt-2 flex flex-wrap gap-1">
@@ -2698,15 +2564,6 @@ return (
                           {m.notes && <div className="text-xs text-white/60 mt-1 line-clamp-2">{m.notes}</div>}
                           <div className="text-xs text-white/55 mt-2 flex items-center justify-between gap-2">
                             <span>{m.supplierId && supplierById[m.supplierId] ? supplierById[m.supplierId].name : ""}</span>
-                            {onOpenRecord && (
-                              <button
-                                className="rounded-lg px-2 py-1 text-xs bg-sky-500/50 hover:bg-sky-500/80 border border-sky-300/30 font-semibold"
-                                onClick={()=>{ onClose(); onOpenRecord("maintenance", m); }}
-                                title="Apri e modifica"
-                              >
-                                <i className="fa-solid fa-arrow-up-right-from-square mr-1"></i>Apri
-                              </button>
-                            )}
                           </div>
                           {(m.attachments && m.attachments.length > 0) && (
                             <div className="mt-2 flex flex-wrap gap-1">
@@ -2945,15 +2802,6 @@ return (
                     ) : '—';
                   } 
                 },
-                { key:"open", label:"", render:(a)=> onOpenRecord ? (
-                  <button
-                    className="rounded-xl px-3 py-1.5 text-xs bg-sky-500/60 hover:bg-sky-500/90 border border-sky-300/30 font-semibold whitespace-nowrap"
-                    onClick={()=>{ setOpenAccList(false); onClose(); onOpenRecord("accident", a); }}
-                    title="Apri e modifica questo sinistro"
-                  >
-                    <i className="fa-solid fa-arrow-up-right-from-square mr-1"></i>Apri
-                  </button>
-                ) : null },
               ]}
               rows={accidents}
               rowKey={(r)=>r.id}
@@ -2984,15 +2832,6 @@ return (
                     ) : '—';
                   } 
                 },
-                { key:"open", label:"", render:(m)=> onOpenRecord ? (
-                  <button
-                    className="rounded-xl px-3 py-1.5 text-xs bg-sky-500/60 hover:bg-sky-500/90 border border-sky-300/30 font-semibold whitespace-nowrap"
-                    onClick={()=>{ setOpenMaintList(false); onClose(); onOpenRecord("maintenance", m); }}
-                    title="Apri e modifica questa manutenzione"
-                  >
-                    <i className="fa-solid fa-arrow-up-right-from-square mr-1"></i>Apri
-                  </button>
-                ) : null },
               ]}
               rows={maints}
               rowKey={(r)=>r.id}
@@ -3257,30 +3096,27 @@ return (
           const maints = replaceMode ? mNorm : merged(prev.maintenances, mNorm, m => m.plate + "|" + (m.date||"") + "|" + (m.type||""));
           const bills = replaceMode ? bNorm : merged(prev.bills, bNorm, b => b.plate + "|" + (b.dueDate||"") + "|" + (b.type||""));
           const suppliers = replaceMode ? nextSuppliers : merged(prev.suppliers, nextSuppliers, s => (s.name||"").toLowerCase()+"|"+(s.type||"").toLowerCase());
-          const newData = { ...prev, vehicles, accidents, maintenances: maints, bills, suppliers };
-          saveStore(newData);
-          return newData;
+          return { ...prev, vehicles, accidents, maintenances: maints, bills, suppliers };
         });
 
         toast(replaceMode ? "Import Excel (sostituzione) completato." : "Import Excel (merge) completato.");
       };
 
+
       // =====================================================================
-      // IMPORT FLEET SYNC — carica il CSV giornaliero del gestionale
+      // IMPORT CSV GESTIONALE — aggiorna SOLO la tabella Vehicles (veicoli)
       // Colonne riconosciute automaticamente (separatore ; o ,):
-      //   Targa → plate
+      //   Targa  → plate
       //   Telaio → vin
+      //   Marca/Brand → brand
+      //   Modello → model
+      //   Tipo/Tipologia/Category → category
       //   Inizio disponibilita → availabilityStart
       //   Fine disponibilita   → availabilityEnd
-      //   Centro ricavo        → hub  (centro di costo)
-      //   Brand                → brand
-      //   Modello              → model
-      //   Anno                 → year
-      //   Tipologia            → category
       // Logica:
-      //   - Targa esistente → aggiorna SOLO availabilityStart, availabilityEnd, hub
-      //     (non tocca fatture, note, sinistri, manutenzioni, ecc.)
-      //   - Targa non presente → aggiunge il veicolo con i campi base
+      //   - Targa esistente → aggiorna SOLO i campi sopra (NON tocca altro)
+      //   - Targa nuova → aggiunge un veicolo con campi base
+      //   - Non elimina mai veicoli non presenti nel CSV
       // =====================================================================
       const importFleetSync = async (file) => {
         if (!file) return;
@@ -3290,70 +3126,67 @@ return (
         const firstLine = text.split(/\r?\n/)[0] || "";
         const delim = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : ",";
 
-        // Parse CSV to array of objects
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         if (lines.length < 2) { toast("❌ File CSV vuoto o non valido."); return; }
 
-        // Header normalization helper
         const normalizeHeader = (h) =>
           String(h || "")
             .toLowerCase()
             .trim()
             .replace(/"/g, "")
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // rimuove accenti
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
             .replace(/\s+/g, "_");
 
         const rawHeaders = lines[0].split(delim).map(h => h.replace(/^"|"$/g, "").trim());
         const headers = rawHeaders.map(normalizeHeader);
 
-        // Column mapping: normalized header → field name
         const COL_MAP = {
           "targa":                  "plate",
+          "plate":                  "plate",
           "telaio":                 "vin",
-          "inizio_disponibilita":   "availabilityStart",
-          "fine_disponibilita":     "availabilityEnd",
-          "centro_ricavo":          "hub",
+          "vin":                    "vin",
+          "marca":                  "brand",
           "brand":                  "brand",
           "modello":                "model",
           "model":                  "model",
-          "anno":                   "year",
-          "year":                   "year",
+          "tipo":                   "category",
           "tipologia":              "category",
+          "categoria":              "category",
           "category":               "category",
-          "alimentazione":          "fuel",
-          "trasmissione":           "transmission",
-          "colore_esterni":         "color",
-          "id":                     "externalId",
-          "id_remoto":              "externalId",
+          "inizio_disponibilita":   "availabilityStart",
+          "inizio_disponibilita_":  "availabilityStart",
+          "fine_disponibilita":     "availabilityEnd",
+          "data_inizio_disponibilita":"availabilityStart",
+          "data_fine_disponibilita":"availabilityEnd",
+          "inizio_disponibilita_da":"availabilityStart",
+          "fine_disponibilita_a":"availabilityEnd",
+          "disponibile_dal":"availabilityStart",
+          "disponibile_al":"availabilityEnd",
         };
 
         const getColIndex = (fieldName) => {
-          // exact match on normalized header
           for (let i = 0; i < headers.length; i++) {
             if (COL_MAP[headers[i]] === fieldName) return i;
           }
           return -1;
         };
 
-        const idxPlate   = getColIndex("plate");
-        const idxVin     = getColIndex("vin");
-        const idxStart   = getColIndex("availabilityStart");
-        const idxEnd     = getColIndex("availabilityEnd");
-        const idxHub     = getColIndex("hub");
-        const idxBrand   = getColIndex("brand");
-        const idxModel   = getColIndex("model");
-        const idxYear    = getColIndex("year");
-        const idxCat     = getColIndex("category");
+        const idxPlate = getColIndex("plate");
+        const idxVin   = getColIndex("vin");
+        const idxBrand = getColIndex("brand");
+        const idxModel = getColIndex("model");
+        const idxCat   = getColIndex("category");
+        const idxStart = getColIndex("availabilityStart");
+        const idxEnd   = getColIndex("availabilityEnd");
 
         if (idxPlate === -1) {
           toast('❌ Colonna "Targa" non trovata nel CSV. Verifica il file.');
           return;
         }
 
-        // Parse data rows
+        // Parse data rows (gestione virgolette)
         const csvRows = [];
         for (let i = 1; i < lines.length; i++) {
-          // Handle quoted fields
           const cols = [];
           let cur = "", inQ = false;
           for (const ch of lines[i]) {
@@ -3369,13 +3202,11 @@ return (
           csvRows.push({
             plate,
             vin:               idxVin   >= 0 ? String(cols[idxVin]  || "").trim() : "",
-            availabilityStart: idxStart >= 0 ? excelSerialToISO(cols[idxStart]) : "",
-            availabilityEnd:   idxEnd   >= 0 ? excelSerialToISO(cols[idxEnd])   : "",
-            hub:               idxHub   >= 0 ? String(cols[idxHub]  || "").trim() : "",
             brand:             idxBrand >= 0 ? String(cols[idxBrand]|| "").trim() : "",
             model:             idxModel >= 0 ? String(cols[idxModel]|| "").trim() : "",
-            year:              idxYear  >= 0 ? String(cols[idxYear] || "").trim() : "",
             category:          idxCat   >= 0 ? String(cols[idxCat]  || "").trim() : "",
+            availabilityStart: idxStart >= 0 ? excelSerialToISO(cols[idxStart]) : "",
+            availabilityEnd:   idxEnd   >= 0 ? excelSerialToISO(cols[idxEnd])   : "",
           });
         }
 
@@ -3383,27 +3214,24 @@ return (
 
         let updated = 0, added = 0;
 
-        let __finalVehicles = null;
-
         setData(prev => {
-          // Build a map of existing vehicles by plate
           const existingMap = new Map(prev.vehicles.map(v => [normalizePlate(v.plate), v]));
 
-          const newVehicles = csvRows.map(row => {
+          const nextVehiclesFromCsv = csvRows.map(row => {
             const existing = existingMap.get(row.plate);
             if (existing) {
-              // UPDATE: solo disponibilità e hub, tutto il resto rimane invariato
               updated++;
               return {
                 ...existing,
+                // aggiorna SOLO questi campi
+                vin:               row.vin               || existing.vin               || "",
+                brand:             row.brand             || existing.brand             || "",
+                model:             row.model             || existing.model             || "",
+                category:          row.category          || existing.category          || "",
                 availabilityStart: row.availabilityStart || existing.availabilityStart || "",
                 availabilityEnd:   row.availabilityEnd   || existing.availabilityEnd   || "",
-                hub:               row.hub               || existing.hub               || "",
-                // Aggiorna anche VIN se nel CSV è presente e nel DB manca
-                vin:               existing.vin || row.vin || "",
               };
             } else {
-              // INSERT: nuovo veicolo con i campi base
               added++;
               return {
                 id:                uid(),
@@ -3411,9 +3239,9 @@ return (
                 vin:               row.vin,
                 brand:             row.brand,
                 model:             row.model,
-                year:              row.year,
+                year:              "",
                 category:          row.category,
-                hub:               row.hub,
+                hub:               "",
                 group:             "",
                 km:                null,
                 availabilityStart: row.availabilityStart,
@@ -3429,33 +3257,23 @@ return (
             }
           });
 
-          // Veicoli nel DB che NON sono nel CSV → li manteniamo invariati
           const csvPlates = new Set(csvRows.map(r => r.plate));
           const untouchedVehicles = prev.vehicles.filter(v => !csvPlates.has(normalizePlate(v.plate)));
 
-          const merged = [...newVehicles, ...untouchedVehicles];
+          const merged = [...nextVehiclesFromCsv, ...untouchedVehicles];
           const newData = { ...prev, vehicles: merged };
           saveStore(newData);
           return newData;
         });
 
-        // Scrivi subito su Supabase (DB ufficiale)
-        try {
-          await requireSession();
-          if (__finalVehicles && __finalVehicles.length) {
-            await upsertVehiclesChunked(__finalVehicles, 500);
-          }
-          toast(`✅ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti. (Salvato su DB)`);
-        } catch (e) {
-          console.error(e);
-          toast(`⚠️ Sync completato: ${updated} aggiornati, ${added} nuovi aggiunti. (DB non aggiornato: ${(e && (e.message||e.toString())) || "errore"})`);
-        }
+        toast(`✅ Import CSV gestionale: ${updated} aggiornati, ${added} nuovi aggiunti.`);
       };
+
 
       const jsonRef = useRef(null);
       const xlsxRef = useRef(null);
-      const fleetSyncRef = useRef(null);
 
+      const fleetSyncRef = useRef(null);
       return (
         <div className="space-y-4">
           <DataBar>
@@ -3470,57 +3288,6 @@ return (
           </DataBar>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-
-            {/* ═══════════════════════════════════════════════════════════
-                FLEET SYNC CARD — import giornaliero CSV gestionale
-            ═══════════════════════════════════════════════════════════ */}
-            <div className="glass rounded-2xl p-4 space-y-3 border-2 border-sky-500/40 md:col-span-2">
-              <div className="flex items-center gap-2">
-                <i className="fa-solid fa-rotate text-sky-400 text-lg"></i>
-                <div className="font-semibold text-sky-100">Sync Giornaliero Fleet CSV</div>
-                <Badge tone="info">Smart Import</Badge>
-              </div>
-              <div className="text-sm text-white/70 space-y-1">
-                <p>Carica il CSV che scarichi ogni giorno dal gestionale — <strong className="text-white">non serve modificarlo</strong>. Il sistema:</p>
-                <ul className="list-disc list-inside text-white/60 text-xs space-y-0.5 ml-2">
-                  <li><span className="text-sky-300 font-semibold">Aggiorna</span> inizio/fine disponibilità e centro di costo per i veicoli già presenti <span className="text-white/50">(fatture, note, sinistri, allegati rimangono intatti)</span></li>
-                  <li><span className="text-emerald-300 font-semibold">Aggiunge</span> i veicoli nuovi con: targa, telaio, brand, modello, disponibilità e centro di costo</li>
-                  <li>Ignora automaticamente le righe senza targa</li>
-                </ul>
-                <p className="text-xs text-white/50 mt-1">
-                  <i className="fa-solid fa-table-columns mr-1"></i>
-                  Colonne rilevate automaticamente:&nbsp;
-                  <code className="text-sky-300">Targa · Telaio · Inizio disponibilita · Fine disponibilita · Centro ricavo · Brand · Modello · Anno · Tipologia</code>
-                </p>
-              </div>
-              <div className="flex gap-3 flex-wrap items-center pt-1">
-                <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-sky-600/70 hover:bg-sky-500/90 border border-sky-300/30 cursor-pointer select-none font-semibold text-sm transition-colors">
-                  <i className="fa-solid fa-rotate"></i>
-                  <span>Carica CSV gestionale</span>
-                  <input
-                    ref={fleetSyncRef}
-                    type="file"
-                    accept=".csv,.txt"
-                    className="hidden"
-                    onChange={async (e) => {
-                      try {
-                        const f = e.target.files?.[0];
-                        if (f) await importFleetSync(f);
-                      } catch(err) {
-                        toast("❌ Errore sync fleet: " + (err?.message || err));
-                        console.error("Fleet sync error:", err);
-                      } finally {
-                        e.target.value = "";
-                      }
-                    }}
-                  />
-                </label>
-                <span className="text-xs text-white/55">
-                  Supporta <code className="text-white/80">.csv</code> con separatore <code className="text-white/80">;</code> o <code className="text-white/80">,</code>
-                </span>
-              </div>
-            </div>
-
             <div className="glass rounded-2xl p-4 space-y-3">
               <div className="font-semibold">Template Excel (Tracciato)</div>
               <div className="text-sm text-white/70">
@@ -3746,14 +3513,7 @@ return (
         }
 
         const dir = sortDir === "asc" ? 1 : -1;
-
-        // Ordine primario: disponibili oggi PRIMA dei non disponibili
-        // Ordine secondario: criterio selezionato dall'utente (alfabetico per default)
-        const today = todayISO();
         rows.sort((a,b) => {
-          const aAvail = isVehicleAvailableOn(a, today) ? 0 : 1;
-          const bAvail = isVehicleAvailableOn(b, today) ? 0 : 1;
-          if (aAvail !== bAvail) return aAvail - bAvail;
           const va = a[sortKey] || "";
           const vb = b[sortKey] || "";
           if (sortKey === "km") return dir * ((va||0) - (vb||0));
@@ -3887,7 +3647,7 @@ return (
       );
     };
 
-    const GenericListView = ({ kind, data, setData, toast, onOpenSummary, pendingRecord, onPendingRecordHandled }) => {
+    const GenericListView = ({ kind, data, setData, toast, onOpenSummary }) => {
       const titleMap = {
         accident: { icon:"fa-triangle-exclamation", title:"Sinistri" },
         maintenance: { icon:"fa-screwdriver-wrench", title:"Manutenzioni" },
@@ -3902,18 +3662,8 @@ return (
       const [onlyDueSoon, setOnlyDueSoon] = useState(false); // bills
       const [days, setDays] = useState(30);
 
-      // Se arriva un pendingRecord valido per questo kind, inizializza subito
-      // editing e openForm al primo render (useState lazy initializer).
-      // In questo modo il form è già aperto al mount, senza aspettare useEffect.
-      const _hasPending = !!(pendingRecord && pendingRecord.kind === kind);
-      const [editing, setEditing] = useState(() => _hasPending ? pendingRecord.record : null);
-      const [openForm, setOpenForm] = useState(() => _hasPending);
-
-      // Notifica il parent che abbiamo consumato il pendingRecord (pulisce la ref)
-      useEffect(() => {
-        if (_hasPending && onPendingRecordHandled) onPendingRecordHandled();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, []); // solo al mount
+      const [editing, setEditing] = useState(null);
+      const [openForm, setOpenForm] = useState(false);
 
       const items = kind === "accident" ? data.accidents : kind === "maintenance" ? data.maintenances : data.bills;
 
@@ -4018,9 +3768,7 @@ return (
           const arr = prev[key];
           const idx = arr.findIndex(x => x.id === payload.id);
           const next = idx >= 0 ? arr.map(x => x.id === payload.id ? payload : x) : [...arr, payload];
-          const newData = { ...prev, [key]: next };
-          saveStore(newData);
-          return newData;
+          return { ...prev, [key]: next };
         });
         setOpenForm(false);
         setEditing(null);
@@ -4357,7 +4105,7 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
     // ---------- App ----------
     const FleetManagerApp = () => {
-      const [data, setData] = useState(() => ({ ...defaultData, ...(loadStore() || {}) }));
+      const [data, setData] = useState(defaultData);
       const dataRef = useRef(data);
       useEffect(() => { dataRef.current = data; }, [data]);
 
@@ -4412,43 +4160,49 @@ const LoginScreen = ({ onLogin, errorMsg }) => {
 
       const [selectedPlate, setSelectedPlate] = useState("");
       const [summaryPlate, setSummaryPlate] = useState("");
-      const pendingRecordRef = useRef(null); // usa ref per evitare batching issues
 
 
       const applyingRemoteRef = useRef(false);
-
-      // Auto-sync: ogni modifica (salvata in UI) viene scritta su Supabase.
-      // Nota: viene bypassato quando stiamo applicando dati provenienti dal DB (applyingRemoteRef=true).
-      const autoSyncTimerRef = useRef(null);
-      useEffect(() => {
-        if (!session) return;
-        if (applyingRemoteRef.current) return;
-        // Debounce per evitare sync continui mentre si digita
-        if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
-        autoSyncTimerRef.current = setTimeout(async () => {
-          try {
-            await pushAllToDB(dataRef.current);
-          } catch (e) {
-            console.error("Auto-sync DB failed:", e);
-            toast("Errore durante la sincronizzazione su DB");
-          }
-        }, 1200);
-        return () => {};
-      }, [data, session]);
 
       const safeFetchAll = async () => {
         applyingRemoteRef.current = true;
         try {
           const dbData = await fetchAllFromDB();
-          setData(prev => ({ ...prev, ...dbData }));
+          setData(dbData);
         } finally {
           // Sblocca dopo aver applicato lo state (evita loop realtime -> setData -> autosync)
           setTimeout(() => { applyingRemoteRef.current = false; }, 0);
         }
       };
+useEffect(() => {
+  // Lightweight refresh strategy (no Realtime subscriptions):
+  // - refresh when tab becomes visible
+  // - refresh periodically while visible (every 120s)
+  if (!session) return;
 
-// DB auto-refresh disabled: manual reload only
+  let timer = null;
 
+  const refreshIfVisible = async () => {
+    if (document.hidden) return;
+    if (applyingRemoteRef.current) return;
+    if ((window.__FM_MODAL_COUNT__ || 0) > 0) return;
+    await safeFetchAll();
+  };
+
+  const onVisibility = () => { refreshIfVisible(); };
+
+  document.addEventListener("visibilitychange", onVisibility);
+
+  timer = setInterval(() => { refreshIfVisible(); }, 120000);
+
+  // initial
+  refreshIfVisible();
+
+  return () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    if (timer) clearInterval(timer);
+  };
+}, [session]);
 
       useEffect(() => {
   (async () => {
@@ -4539,16 +4293,6 @@ useEffect(() => {
         setSummaryPlate(p);
       };
 
-      // Apre direttamente un sinistro/manutenzione/bollo dal VehicleSummary
-      const onOpenRecord = (kind, record) => {
-        const targetView = kind === "accident" ? "accidents" : kind === "maintenance" ? "maintenances" : "bills";
-        pendingRecordRef.current = { kind, record }; // scrivi PRIMA di cambiare view
-        setSummaryPlate(""); // chiudi il summary
-        // Usiamo flushSync-like via setTimeout(0) per garantire che la ref
-        // sia scritta PRIMA che React rielabori View con la nuova view
-        setView(targetView);
-      };
-
       // Funzione per backup manuale
       const handleManualBackup = () => {
         downloadBackupExcel(data);
@@ -4568,9 +4312,9 @@ useEffect(() => {
       const View = () => {
         if (view === "dashboard") return <Dashboard data={data} onOpenSummary={onOpenSummary} />;
         if (view === "vehicles") return <VehiclesView data={data} setData={setData} onOpenSummary={onOpenSummary} toast={toast} />;
-        if (view === "accidents") return <GenericListView key={"acc-"+(pendingRecordRef.current?.record?.id||"list")} kind="accident" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
-        if (view === "maintenances") return <GenericListView key={"mnt-"+(pendingRecordRef.current?.record?.id||"list")} kind="maintenance" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
-        if (view === "bills") return <GenericListView key={"bil-"+(pendingRecordRef.current?.record?.id||"list")} kind="bill" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} pendingRecord={pendingRecordRef.current} onPendingRecordHandled={()=>{ pendingRecordRef.current = null; }} />;
+        if (view === "accidents") return <GenericListView kind="accident" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
+        if (view === "maintenances") return <GenericListView kind="maintenance" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
+        if (view === "bills") return <GenericListView kind="bill" data={data} setData={setData} toast={toast} onOpenSummary={onOpenSummary} />;
         if (view === "suppliers") return <SuppliersView data={data} setData={setData} toast={toast} />;
         return <ExportImportPanel data={data} setData={setData} toast={toast} />;
       };
@@ -4595,7 +4339,7 @@ useEffect(() => {
                 </div>
                 <div>
                   <div className="font-bold text-lg">Fleet Manager</div>
-                  <div className="text-xs text-white/55">Pro v3.7.3 — Security Hardening</div>
+                  <div className="text-xs text-white/55">Pro v3.7.2 — Bug Fix Release (Stable)</div>
                 </div>
               </div>
             </div>
@@ -4666,7 +4410,7 @@ useEffect(() => {
           </main>
 
           {/* Summary modal */}
-          <VehicleSummary plate={summaryPlate} data={data} onClose={()=>setSummaryPlate("")} onOpenRecord={onOpenRecord} />
+          <VehicleSummary plate={summaryPlate} data={data} onClose={()=>setSummaryPlate("")} />
 
           {/* Backup modal (18:00) */}
           {backupModalOpen ? (
