@@ -222,6 +222,38 @@ async function pushAllToDB(appData) {
   // Se qualche record non ha id, lo generiamo.
   const ensureId = (x) => ({ ...x, id: x.id || crypto.randomUUID() });
 
+  // Normalize date values before sending to Supabase (date columns reject invalid strings like "n.d.")
+  const normalizeDate = (v) => {
+    if (v === null || v === undefined) return null;
+    let s = String(v).trim();
+    if (!s) return null;
+    s = s.replace(/^"|"$/g, "").trim();
+    const low = s.toLowerCase();
+    if (["n.d.", "nd", "n/d", "n.a.", "na", "null", "none", "-"].includes(low)) return null;
+
+    // Already ISO date (YYYY-MM-DD)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+    // Common Italian formats: DD/MM/YYYY or DD-MM-YYYY
+    let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      let dd = parseInt(m[1], 10);
+      let mm = parseInt(m[2], 10);
+      let yy = parseInt(m[3].length === 2 ? ("20" + m[3]) : m[3], 10);
+      if (yy >= 1900 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return `${yy}-${pad(mm)}-${pad(dd)}`;
+      }
+      return null;
+    }
+
+    // DateTime ISO -> take date part
+    m = s.match(/^(\d{4}-\d{2}-\d{2})[ T].+$/);
+    if (m) return m[1];
+
+    return null;
+  };
+
   const suppliersRows = (appData.suppliers || []).map(ensureId).map(s => ({
     id: s.id,
     name: s.name || "",
@@ -235,7 +267,7 @@ async function pushAllToDB(appData) {
   const accidentsRows = (appData.accidents || []).map(ensureId).map(a => ({
     id: a.id,
     plate: (a.plate || "").trim().toUpperCase(),
-    date: a.date || null,
+    date: normalizeDate(a.date || null),
     start_date: a.startDate || a.start_date || null,
     end_date: a.endDate || a.end_date || null,
     status: a.status || "",
@@ -317,8 +349,8 @@ async function upsertTable(table, rows) {
     vin: v.vin ?? "",
     km: (v.km ?? null),
 
-    availability_start: (v.availabilityStart ?? v.availability_start ?? null),
-    availability_end: (v.availabilityEnd ?? v.availability_end ?? null),
+    availability_start: normalizeDate(v.availabilityStart ?? v.availability_start ?? null),
+    availability_end: normalizeDate(v.availabilityEnd ?? v.availability_end ?? null),
     periods: Array.isArray(v.periods) ? v.periods : (v.periods ? v.periods : []),
     notes: v.notes || "",
 
@@ -329,8 +361,8 @@ async function upsertTable(table, rows) {
     rtr_fee: (v.rtrFee ?? v.rtr_fee ?? null),
     holding_cost: (v.holdingCost ?? v.holding_cost ?? null),
 
-    purchase_date: (v.purchaseDate ?? v.purchase_date ?? null),
-    sale_date: (v.saleDate ?? v.sale_date ?? null),
+    purchase_date: normalizeDate(v.purchaseDate ?? v.purchase_date ?? null),
+    sale_date: normalizeDate(v.saleDate ?? v.sale_date ?? null),
 
     hc: (v.hc ?? v.h_c ?? v.hc_text ?? null),
 
@@ -355,9 +387,9 @@ async function upsertTable(table, rows) {
     return {
       id: a.id,
       plate: String(a.plate || "").trim().toUpperCase(),
-      date: a.date || null,
-      start_date: a.startDate || a.start_date || null,
-      end_date: a.endDate || a.end_date || null,
+      date: normalizeDate(a.date || null),
+      start_date: normalizeDate(a.startDate || a.start_date || null),
+      end_date: normalizeDate(a.endDate || a.end_date || null),
       status: a.status || "aperto",
       description: a.description || "",
       location: a.location || "",
