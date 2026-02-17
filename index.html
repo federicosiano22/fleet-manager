@@ -167,17 +167,20 @@ const { useEffect, useMemo, useRef, useState } = React;
       if (db.error) throw db.error;
     }
 
-async function pushAllToDB(appData) {
-  // Helper function per gestire valori numerici null
-  // Converte stringa vuota "" in null — fondamentale per campi DATE/INT su Supabase
-  const orNull = (v) => (v === null || v === undefined || v === "" || v === 0 && false) ? null : v;
-  const dateOrNull = (v) => (!v || String(v).trim() === "") ? null : String(v).trim();
+// ── Helper globali per sanitizzare valori prima dell'invio a Supabase ──────────
+// dateOrNull: converte "" / null / undefined → null (Supabase DATE non accetta "")
+const dateOrNull = (v) => (!v || String(v).trim() === "") ? null : String(v).trim();
+// orNull: converte "" → null per campi opzionali non-date
+const orNull = (v) => (v === null || v === undefined || v === "") ? null : v;
+// parseNumOrNull: converte stringhe numeriche → number, "" → null
+const parseNumOrNull = (val) => {
+  if (val === null || val === undefined || val === '') return null;
+  const num = parseFloat(String(val).replace(',', '.'));
+  return isNaN(num) ? null : num;
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const parseNumOrNull = (val) => {
-    if (val === null || val === undefined || val === '') return null;
-    const num = parseFloat(String(val).replace(',', '.'));
-    return isNaN(num) ? null : num;
-  };
+async function pushAllToDB(appData) {
 
   // 1) VEHICLES: mapping + upsert su plate
   const vehiclesRows = (appData.vehicles || [])
