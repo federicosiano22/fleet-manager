@@ -3185,10 +3185,32 @@ return (
       };
 
       const toISOFromDMY = (v) => {
-        if (v === null || v === undefined) return "";
-        const s = String(v).trim();
-        if (!s || /^n\.?d\.?$/i.test(s) || s === "-" ) return "";
-        const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) || s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
+        if (v === null || v === undefined) return null;
+        // normalize: remove zero-width/invisible chars and trim
+        let s = String(v)
+          .replace(/[\u200B-\u200D\uFEFF]/g, "")
+          .trim()
+          .toLowerCase();
+
+        if (!s) return null;
+
+        // treat common "no date" tokens as null
+        if (
+          s === "-" ||
+          s === "n" || s === "nd" || s === "n.d" || s === "n.d." ||
+          s === "n/d" || s === "n\u002fd" ||
+          s === "na" || s === "n/a" ||
+          s === "none" || s === "null" || s === "undefined"
+        ) return null;
+
+        // if it doesn't start with a digit, it's not a date we accept
+        if (!/^[0-9]/.test(s)) return null;
+
+        // D/M/Y or D-M-Y
+        const m =
+          s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/) ||
+          s.match(/^(\d{1,2})\-(\d{1,2})\-(\d{2,4})$/);
+
         if (m) {
           const dd = String(m[1]).padStart(2, "0");
           const mm = String(m[2]).padStart(2, "0");
@@ -3196,9 +3218,15 @@ return (
           if (yy.length === 2) yy = "20" + yy;
           return `${yy}-${mm}-${dd}`;
         }
+
+        // ISO already
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+        // last resort: Date parser
         const d = new Date(s);
         if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-        return "";
+
+        return null;
       };
 
       const importGestionaleCSV = async (file) => {
@@ -3247,11 +3275,14 @@ return (
           const plate = String(plateRaw || "").trim().toUpperCase();
           if (!plate) continue;
 
-          const availabilityStart = iStart >= 0 ? toISOFromDMY(row[iStart]) : "";
-          // filtro richiesto: solo veicoli con inizio disponibilità >= 01/01/2024
-          if (!availabilityStart || availabilityStart < cutoff) continue;
+          const availabilityStart = iStart >= 0 ? toISOFromDMY(row[iStart]) : null;
+          const availabilityEnd = iEnd >= 0 ? toISOFromDMY(row[iEnd]) : null;
 
-          const availabilityEnd = iEnd >= 0 ? toISOFromDMY(row[iEnd]) : "";
+          // Requisito: se non hanno data inizio e data fine disponibilità, non importarli
+          if (!availabilityStart || !availabilityEnd) continue;
+
+          // filtro richiesto: solo veicoli con inizio disponibilità >= 01/01/2024
+          if (availabilityStart < cutoff) continue;
           const vin = iVin >= 0 ? String(row[iVin] || "").trim() : "";
           const brand = iBrand >= 0 ? String(row[iBrand] || "").trim() : "";
           const model = iModel >= 0 ? String(row[iModel] || "").trim() : "";
