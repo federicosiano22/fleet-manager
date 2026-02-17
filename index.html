@@ -80,13 +80,9 @@ const { useEffect, useMemo, useRef, useState } = React;
     // =====================
     // Supabase init
     // =====================
-    // Le credenziali sono codificate in Base64 — la protezione reale è garantita
-    // dalle Row Level Security (RLS) policies su Supabase: senza sessione autenticata
-    // nessuna operazione su DB o Storage è possibile, indipendentemente dalla chiave.
-    const _c = (s) => atob(s);
-    const SUPABASE_URL = _c("aHR0cHM6Ly9wYWpkZ2FiYWJra3hnbWZ4emF6cS5zdXBhYmFzZS5jbw==");
-    const SUPABASE_ANON_KEY = _c("ZXlKaGJHY2lPaUpJVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKemRYQmhZbUZ6WlNJc0luSmxaaUk2SW5CaGFtUm5ZV0poWW10eWVHZHRabmg2WVhweElpd2ljbTlzWlNJNkltRnViMjRpTENKcFlYUWlPakUzTnpBeU9UTXlOakVzSW1WNGNDSTZNREE0TlRnMk9USXlOakY5LjBQWkJKbDdYWnB3c3gzeUh1cE1LUFIyQkRNS2dUOUNYd0dpSVVNdzBnV1U=");
-    const STORAGE_BUCKET = "fleet-manager";
+    const SUPABASE_URL = "https://pajdgababkkxgmfxzazq.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBhamRnYWJhYmtreGdtZnh6YXpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyOTMyNjEsImV4cCI6MjA4NTg2OTI2MX0.0PZBJl7XZpwsx3yHupMKPR2BDMKgT9CXwGiIUMw0gWU";
+    const STORAGE_BUCKET = "fleet-manager"; // Bucket per documenti veicoli (CDC, fatture, contratti)
 
     const supabase = window.supabase.createClient(
   SUPABASE_URL,
