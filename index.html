@@ -182,6 +182,8 @@ async function pushAllToDB(appData) {
       let s = String(v);
       // Remove zero-width and non-printing chars that can break regex/trim
       s = s.replace(/[\u200B-\u200D\uFEFF]/g, "");
+      // Strip surrounding quotes that may come from CSV fields like ""
+      s = s.replace(/^"+|"+$/g, "");
       s = s.trim();
       if (!s) return null;
 
@@ -368,8 +370,8 @@ async function upsertTable(table, rows) {
     rtr_fee: (v.rtrFee ?? v.rtr_fee ?? null),
     holding_cost: (v.holdingCost ?? v.holding_cost ?? null),
 
-    purchase_date: (v.purchaseDate ?? v.purchase_date ?? null),
-    sale_date: (v.saleDate ?? v.sale_date ?? null),
+    purchase_date: normalizeDateForDB(v.purchaseDate ?? v.purchase_date),
+    sale_date: normalizeDateForDB(v.saleDate ?? v.sale_date),
 
     hc: (v.hc ?? v.h_c ?? v.hc_text ?? null),
 
