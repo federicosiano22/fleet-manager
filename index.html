@@ -688,8 +688,8 @@ const excelSerialToISO = (v) => {
 
     const isVehicleAvailableOn = (vehicle, isoDate) => {
       const d = isoDate || todayISO();
-      const start = vehicle?.availabilityStart || null;
-      const end   = vehicle?.availabilityEnd   || null;
+      const start = vehicle?.availabilityStart || vehicle?.availability_start || null;
+      const end   = vehicle?.availabilityEnd   || vehicle?.availability_end   || null;
       // If both empty => available (legacy)
       if (!start && !end) return true;
       return withinRange(d, start, end);
