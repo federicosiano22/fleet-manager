@@ -3211,6 +3211,7 @@ return (
 
           const cutoff = "2024-01-01";
           let added = 0, updated = 0, skipped = 0;
+          let vehiclesResult = [];
 
           setData(prev => {
             const byPlate = new Map((prev.vehicles || []).map(v => [String(v.plate||"").trim().toUpperCase(), v]));
@@ -3255,6 +3256,7 @@ return (
             }
 
             const vehicles = Array.from(byPlate.values());
+            vehiclesResult = vehicles; // salva riferimento esterno per sync DB
             const newData = { ...prev, vehicles };
             saveStore(newData);
             return newData;
@@ -3262,7 +3264,7 @@ return (
 
           // Sync su Supabase usando i veicoli calcolati localmente (non da setData)
           toast(`CSV gestionale import: ${added} aggiunti, ${updated} aggiornati, ${skipped} saltati. Sincronizzazione DB in corso...`);
-          upsertTable("vehicles", Array.from(byPlate.values()))
+          upsertTable("vehicles", vehiclesResult)
             .then(() => {
               toast(`✅ CSV sincronizzato su DB: ${added} aggiunti, ${updated} aggiornati.`);
             })
